@@ -1,0 +1,94 @@
+# LumbungDB. Pasang di VM khusus, di luar mesin fisik server database.
+# Pemasangan pertama:
+#   docker compose up -d db
+#   docker compose run --rm web alembic upgrade head          # sekali per deploy, sebelum up
+#   docker compose run --rm web python -m app.auth.cli create-user admin
+#   docker compose up -d --build
+x-logging: &default-logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "5"}
+
+x-app: &app
+  build: ./server
+  env_file: ${LUMBUNG_ENV_FILE:-.env}
+  # Non-root, disesuaikan dengan pemetaan UID NFS. Tanpa Docker socket.
+  user: "${LUMBUNG_UID:-1000}:${LUMBUNG_GID:-1000}"
+  restart: unless-stopped
+  logging: *default-logging
+  volumes:
+    # rslave: bila NFS ter-mount ulang di server, container ikut melihatnya
+    - type: bind
+      source: ${BACKUP_ROOT:?isi BACKUP_ROOT di .env}
+      target: /data
+      bind: {propagation: rslave}
+    # Folder, bukan satu file: agents.conf ditulis atomik lewat rename
+    - ./config:/config
+  depends_on:
+    db: {condition: service_healthy}
+
+services:
+  db:
+    image: mariadb:11.4
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: lumbung
+      MARIADB_USER: lumbung
+      MARIADB_PASSWORD: ${DB_PASSWORD:?isi DB_PASSWORD di .env}
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - lumbung_state:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    logging: *default-logging
+
+  web:
+    <<: *app
+    environment:
+      DATABASE_URL: mysql+asyncmy://lumbung:${DB_PASSWORD}@db:3306/lumbung
+      # Hanya dari IP ini X-Forwarded-For dan X-Forwarded-Proto dipercaya.
+      FORWARDED_ALLOW_IPS: "${TRUSTED_PROXY_IPS:-172.30.0.0/24}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      retries: 3
+    # Upload yang tersangkut di NFS tidak boleh menahan restart terlalu lama
+    stop_grace_period: 30s
+
+  # Satu instance: memeriksa NAS lewat proses kecil dan menilai alert tiap menit
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.alerts.worker"]
+    environment:
+      DATABASE_URL: mysql+asyncmy://lumbung:${DB_PASSWORD}@db:3306/lumbung
+    stop_grace_period: 15s
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/${NGINX_CONF:-nginx-tls.conf}:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/http-common.inc:/etc/nginx/lumbung/http-common.inc:ro
+      - ./deploy/locations.inc:/etc/nginx/lumbung/locations.inc:ro
+      - ./server/app/static:/srv/static:ro
+      - ${TLS_CERT_DIR:-./deploy/certs}:/etc/nginx/certs:ro
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    depends_on:
+      web: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  lumbung_state:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "${APP_SUBNET:-172.30.0.0/24}"

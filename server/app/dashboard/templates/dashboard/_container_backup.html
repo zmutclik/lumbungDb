@@ -1,0 +1,73 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+<div {{ ui.live(request) }}>
+{% include "dashboard/_container_head.html" %}
+{% set can_write = view.status != "off" %}
+<div class="kv kv-3">
+  <div><small>File diterima</small>{{ state.counts.get("fullbackup", 0) }} full · {{ state.counts.get("databases", 0) }} dump · {{ state.counts.get("binlog", 0) }} binlog</div>
+  <div><small>Disk /backup</small>{% if disk_used is none %}—{% else %}{{ disk_used }}% terpakai{% endif %}</div>
+  <div><small>Folder NAS</small><code>/lumbungdb/{{ view.name }}/</code></div>
+</div>
+<div class="section-title section-wrap"><h2>Jadwal backup</h2>
+  <span class="actions-end">{% if state.source %}<span class="pill pill-off">{{ {"bawaan": "Jadwal bawaan", "env": "Dari env container", "lumbung": "Diatur LumbungDB"}.get(state.source, state.source) }}</span>{% endif %}
+  {% if can_write %}<button class="btn btn-sm" hx-get="/containers/{{ view.name }}/schedule/edit" hx-target="#modal" hx-swap="innerHTML"{% if not state.effective %} disabled{% endif %}>Ubah jadwal</button>
+  <button class="btn btn-sm" hx-get="/containers/{{ view.name }}/requests/new" hx-target="#modal" hx-swap="innerHTML"{% if not writable %} disabled title="NAS bermasalah, hasil backup tidak bisa sampai ke NAS"{% endif %}>Backup sekarang</button>{% endif %}</span></div>
+{% if state.schedule_error %}<div class="banner banner-bad"><b>Agen menolak jadwal versi {{ state.requested_version }}.</b> {{ state.schedule_error }}. Crontab lama tetap dipakai.</div>
+{% elif state.requested_version > state.applied_version %}<div class="banner banner-info"><span class="spin"></span> <b>Menunggu diterapkan: versi {{ state.requested_version }}.</b> Agen mengambilnya pada heartbeat berikutnya. Sampai itu cron tetap memakai jadwal di bawah.</div>{% endif %}
+{% if schedule_rows %}
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Jenis</th><th>Jadwal berlaku</th><th>Berikutnya</th><th>Alert bila lebih tua dari</th></tr></thead><tbody>
+{% for row in schedule_rows %}<tr{% if row.off %} class="row-{{ 'bad' if row.kind == 'full' else 'warn' }}"{% endif %}><td>{{ row.title }}</td><td>{% if row.off %}<b>Mati</b>{% else %}{{ row.label }}{% endif %}</td><td>{{ row.next if view.status != "off" else "—" }}</td><td>{{ row.threshold }}</td></tr>{% endfor %}
+</tbody></table></div>
+<p class="small muted mt-s">{% if view.status == "off" %}Terakhir dilaporkan agen sebelum container dinonaktifkan.{% else %}Dilaporkan agen lewat heartbeat. Cron di container tetap memakai jadwal ini saat LumbungDB mati.{% endif %}</p>
+{% else %}<div class="card"><div class="empty"><b>Belum ada laporan jadwal</b>Jadwal tampil setelah heartbeat pertama.</div></div>{% endif %}
+
+{% if can_write or requests %}<div class="section-title"><h2>Permintaan backup</h2></div>
+{% if requests %}<div class="tbl-wrap"><table class="t"><thead><tr><th>Diminta</th><th>Jenis</th><th>Status</th><th class="num">Durasi</th><th>Keterangan</th><th></th></tr></thead><tbody>
+{% for item in requests %}{% set level = request_pill.get(item.status, "off") %}
+<tr{% if level in ("bad", "warn") %} class="row-{{ level }}"{% endif %}><td>{{ item.created_at | tanggal }}<br><span class="muted small">{{ item.requested_by }}</span></td>
+  <td>{% if item.kind == "full" %}Full{% elif item.kind == "binlog" %}Arsip binlog{% elif item.database %}Dump {{ item.database }}{% else %}Dump semua database{% endif %}</td>
+  <td>{% if item.status in ("Berjalan", "Mengirim") %}<span class="spin"></span> {% endif %}<span class="pill pill-{{ level }}">{{ item.status }}</span></td>
+  <td class="num">{{ durasi(item.started_at, item.finished_at) }}</td>
+  <td class="small">{{ item.note or "" }}{% if item.status == "Gagal" and item.log %}<details><summary>Log</summary><pre class="log">{{ item.log }}</pre></details>{% endif %}</td>
+  <td class="num">{% if item.status == "Menunggu" %}<button class="btn btn-sm" hx-delete="/containers/{{ view.name }}/requests/{{ item.id }}">Batalkan</button>{% endif %}</td></tr>
+{% endfor %}</tbody></table></div>
+{% else %}<div class="card"><div class="empty"><b>Belum ada permintaan</b>Backup di luar jadwal diminta lewat Backup sekarang.</div></div>{% endif %}{% endif %}
+{% if control_log %}<details class="box" id="control-log"><summary>Riwayat perubahan ({{ control_log | length }})</summary><div class="box-body"><div class="tbl-wrap"><table class="t"><thead><tr><th>Waktu</th><th>Tindakan</th><th>Rincian</th><th>Oleh</th></tr></thead><tbody>
+{% for entry in control_log %}<tr><td>{{ entry.at | tanggal }}</td><td>{{ entry.action }}</td><td>{{ entry.detail }}</td><td>{{ entry.actor }}</td></tr>{% endfor %}
+</tbody></table></div></div></details>{% endif %}
+
+{% if dump_rows %}<div class="section-title"><h2>Dump per database</h2><span class="muted small">umur dihitung dari waktu pembuatan backup</span></div>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Database</th><th>Umur dump terakhir</th><th>Status</th></tr></thead><tbody>
+{% for row in dump_rows %}<tr{% if row.late and not row.off %} class="row-bad"{% endif %}><td>{% if row.database == "_users" %}<code>_users</code> <span class="muted small">akun dan hak akses</span>{% else %}{{ row.database }}{% endif %}</td><td>{{ row.last | ago }}</td><td>{% if row.off %}<span class="pill pill-off">Container nonaktif</span>{% elif row.late %}<span class="pill pill-bad">Terlambat</span>{% else %}<span class="pill pill-ok">Normal</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>{% endif %}
+
+{% set info = state.info %}{% set pending = info.get("pending") or {} %}{% set upload_error = info.get("upload_error") %}
+{% if state.heartbeat_at and view.status != "off" %}<div class="section-title"><h2>Pengiriman agen</h2><span class="muted small">dari heartbeat</span></div>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Pemeriksaan</th><th>Hasil</th></tr></thead><tbody>
+<tr><td>Antrean kirim</td><td>{{ pending.get("count", 0) }} file · {{ pending.get("bytes", 0) | filesize }}</td></tr>
+{% if upload_error %}<tr class="row-bad"><td>Error terakhir</td><td><b>{{ upload_error.get("message") }}</b><br><span class="mono">{{ upload_error.get("file") }}</span><br><span class="muted small">{{ upload_error.get("tries") }} percobaan · file lain tetap dikirim</span></td></tr>
+{% else %}<tr><td>Error terakhir</td><td>Tidak ada</td></tr>{% endif %}
+</tbody></table></div>{% endif %}
+
+<div class="section-title"><h2>Riwayat file diterima</h2><span class="muted small">satu baris per file · isi file hanya ada di NAS</span></div>
+{# Filter langsung tanpa memuat ulang halaman; kata kunci ditunda sebentar selagi diketik #}
+<form class="filters" hx-get="/containers/{{ view.name }}/backup" hx-trigger="change, input delay:300ms from:input[name=q]" hx-target="#file-rows" hx-swap="innerHTML">
+  <select name="kind" aria-label="Jenis"><option value="">Semua jenis</option>{% for value, title in (("fullbackup", "full"), ("databases", "dump"), ("binlog", "binlog")) %}<option value="{{ value }}"{% if kind == value %} selected{% endif %}>{{ title }}</option>{% endfor %}</select>
+  <input type="search" name="q" value="{{ q }}" maxlength="100" placeholder="Cari nama file…" aria-label="Cari nama file">
+  {% if day %}<input type="hidden" name="day" value="{{ day }}"><a class="btn btn-sm" href="/containers/{{ view.name }}/backup">Tanggal {{ day }} ✕</a>{% endif %}
+</form>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Jenis</th><th>File</th><th class="num">Ukuran</th><th>Dibuat</th><th>Diterima</th></tr></thead><tbody id="file-rows">
+{% include "dashboard/_file_rows.html" %}
+</tbody></table></div>
+
+{% if integrity %}<div class="section-title"><h2>Checksum berbeda untuk nama yang sama</h2><span class="muted small">file di NAS tidak pernah ditimpa; kedua versi disimpan</span></div>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>File</th><th>Versi pertama</th><th>Versi baru</th><th>Tindakan</th></tr></thead><tbody>
+{% for item in integrity %}<tr class="row-{{ 'ok' if item.reviewed_at else 'warn' }}"><td class="mono">{{ item.kind }}/{{ item.relpath }}</td>
+<td>{{ item.first_size | filesize }} · <span class="mono">{{ item.first_sha[:8] }}</span><br><span class="muted small">diterima {{ item.first_at | tanggal }}</span></td>
+<td>{{ item.new_size | filesize }} · <span class="mono">{{ item.new_sha[:8] }}</span><br><span class="muted small mono">{{ item.new_path }}</span></td>
+<td>{% if item.reviewed_at %}Ditinjau {{ item.reviewed_at | tanggal }} · {{ item.reviewed_by }}{% else %}<button class="btn btn-sm" hx-post="/integrity/{{ item.id }}/review">Tandai sudah ditinjau</button>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>{% endif %}
+
+{% if info.get("log") %}<details class="box" id="backup-log"{% if upload_error or view.alerts | selectattr('key', 'equalto', 'full:' ~ view.name) | list %} open{% endif %}><summary>20 baris terakhir log backup (dari heartbeat)</summary><pre class="log">{% for line in info.get("log") %}{% if "GAGAL" in line or "PERINGATAN" in line or "ERROR" in line %}<span class="err">{{ line }}</span>{% else %}{{ line }}{% endif %}
+{% endfor %}</pre></details>{% endif %}
+</div>

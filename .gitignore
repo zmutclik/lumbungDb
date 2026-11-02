@@ -1,0 +1,10 @@
+.env
+config/agents.conf
+config/runners.conf
+config/.agents*
+deploy/certs/
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.dev/

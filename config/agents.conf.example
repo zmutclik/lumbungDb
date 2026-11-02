@@ -1,0 +1,6 @@
+# LumbungDB: daftar agen
+# Format: nama = token
+#   - nama: huruf, angka, _ . - (diawali huruf atau angka); menjadi nama folder di NAS
+#   - token: minimal 16 karakter
+# Satu baris untuk satu container MariaDB. Nama harus unik di seluruh LumbungDB.
+# Awali baris dengan # untuk menonaktifkan agen. File di NAS tidak ikut terhapus.

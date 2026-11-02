@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% set active = "containers" %}
+{% block title %}{{ view.name }}{% endblock %}
+{% block content %}{% include "dashboard/_container_summary.html" if tab == "ringkasan" else "dashboard/_container_backup.html" %}{% endblock %}

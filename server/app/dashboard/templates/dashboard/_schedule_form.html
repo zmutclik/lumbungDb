@@ -1,0 +1,24 @@
+<form id="schedule-form" hx-put="/containers/{{ name }}/schedule">
+  <h3>Jadwal backup {{ name }}</h3>
+  <div hx-post="/containers/{{ name }}/schedule/preview" hx-trigger="change" hx-include="closest form" hx-target="#schedule-form" hx-swap="outerHTML">
+  {% for row in rows %}{% set k = row.kind %}
+  <div class="field"><label for="bs-{{ k }}-mode">{{ row.title }}</label><div class="bs-row">
+    <select id="bs-{{ k }}-mode" name="{{ k }}_mode">
+      {% if k == "binlog" %}{% set modes = (("mins", "Tiap N menit"), ("custom", "Kustom (cron)"), ("off", "Mati")) %}{% else %}{% set modes = (("day", "Tiap hari"), ("week", "Mingguan"), ("hours", "Tiap N jam"), ("custom", "Kustom (cron)"), ("off", "Mati")) %}{% endif %}
+      {% for value, title in modes %}<option value="{{ value }}"{% if row.mode == value %} selected{% endif %}>{{ title }}</option>{% endfor %}
+    </select>
+    {% if row.mode == "week" %}<select id="bs-{{ k }}-dow" name="{{ k }}_dow" aria-label="Hari {{ row.title }}">{% for day in day_names %}<option value="{{ loop.index0 }}"{% if row.dow == loop.index0 | string %} selected{% endif %}>Tiap {{ day }}</option>{% endfor %}</select>{% endif %}
+    {% if row.mode in ("day", "week") %}<input type="time" id="bs-{{ k }}-time" name="{{ k }}_time" value="{{ row.time or '01:00' }}" aria-label="Jam {{ row.title }} (WIB)">{% endif %}
+    {% if row.mode == "hours" %}<select id="bs-{{ k }}-every" name="{{ k }}_every" aria-label="Jeda {{ row.title }}">{% for n in ("6", "8", "12") %}<option value="{{ n }}"{% if row.every == n %} selected{% endif %}>{{ n }} jam</option>{% endfor %}</select>{% endif %}
+    {% if row.mode == "mins" %}<select id="bs-{{ k }}-every" name="{{ k }}_every" aria-label="Jeda {{ row.title }}">{% for n in ("5", "15", "30", "60") %}<option value="{{ n }}"{% if row.every == n %} selected{% endif %}>{{ n }} menit</option>{% endfor %}</select>{% endif %}
+    {% if row.mode == "custom" %}<input type="text" id="bs-{{ k }}-cron" name="{{ k }}_cron" value="{{ row.cron }}" maxlength="120" placeholder="mis. 30 1 * * 1-5" aria-label="Cron {{ row.title }}" autocomplete="off" spellcheck="false">{% endif %}
+  </div>
+  {% if row.error %}<div class="msg-err">✕ {{ row.error }}</div>{% endif %}
+  {% if row.note %}<div class="msg-err"><b>{{ row.note }}</b></div>{% endif %}
+  {% if row.hint %}<div class="hint">{{ row.hint }}</div>{% endif %}
+  {% if row.warn %}<div class="msg-warn">{{ row.warn }}</div>{% endif %}
+  </div>{% endfor %}
+  </div>
+  <p class="hint">Waktu memakai WIB. Agen menerima jadwal pada heartbeat berikutnya. Bila gagal diterapkan, crontab lama tetap dipakai.</p>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit"{% if not valid %} disabled{% endif %}>Simpan</button></div>
+</form>

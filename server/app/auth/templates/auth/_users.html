@@ -1,0 +1,37 @@
+<div id="accounts">
+  <div class="page-head"><div><h1>Akun admin</h1><div class="sub">Semua akun punya hak yang sama. Akun tidak bisa dihapus, hanya dinonaktifkan, supaya nama di riwayat tetap jelas.</div></div></div>
+  <div class="filters"><a class="btn" href="/settings">‹ Pengaturan</a></div>
+  {% if once %}
+  <div class="once"><b>{{ once.action }}: {{ once.username }}. Password hanya ditampilkan sekali.</b> Password ini wajib diganti saat login berikutnya.</div>
+  <div class="copy" x-data="copyBox"><code class="tok" x-ref="source">{{ once.password }}</code><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div>
+  {% endif %}
+  {% if error %}<div class="banner banner-bad" role="alert">{{ error }}</div>{% endif %}
+  <form class="filters" hx-post="/account/users" hx-target="#accounts" hx-swap="outerHTML">
+    <input type="text" name="username" maxlength="100" placeholder="Username baru" aria-label="Username baru" autocomplete="off" required>
+    <button class="btn btn-pri" type="submit">Tambah akun</button>
+  </form>
+  <div class="tbl-wrap"><table class="t"><thead><tr><th>Username</th><th>Status</th><th>Login terakhir</th><th></th></tr></thead><tbody>
+  {% for account in users %}
+    <tr{% if not account.is_active %} class="row-off"{% endif %}>
+      <td><b>{{ account.username }}</b>{% if account.username == user.username %} <span class="muted small">kamu</span>{% endif %}</td>
+      <td>{% if not account.is_active %}<span class="pill pill-off">Nonaktif</span>{% elif account.must_change_password %}<span class="pill pill-wait">Wajib ganti password</span>{% else %}<span class="pill pill-ok">Aktif</span>{% endif %}</td>
+      <td>{{ account.last_login_at | tanggal }}</td>
+      <td class="num actions-cell">
+        <button class="btn btn-sm" hx-post="/account/users/{{ account.username }}/reset-password" hx-confirm="Reset password {{ account.username }}? Semua sesi akun itu berakhir." hx-target="#accounts" hx-swap="outerHTML">Reset password</button>
+        {% if account.username != user.username %}
+          {% if account.is_active %}
+          <button class="btn btn-sm" hx-post="/account/users/{{ account.username }}/disable" hx-confirm="Nonaktifkan {{ account.username }}? Semua sesinya langsung berakhir." hx-target="#accounts" hx-swap="outerHTML">Nonaktifkan</button>
+          {% else %}
+          <button class="btn btn-sm" hx-post="/account/users/{{ account.username }}/enable" hx-target="#accounts" hx-swap="outerHTML">Aktifkan</button>
+          {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody></table></div>
+  <div class="section-title"><h2>Riwayat akun</h2><span class="muted small">50 terakhir</span></div>
+  <div class="tbl-wrap"><table class="t"><thead><tr><th>Waktu</th><th>Oleh</th><th>Tindakan</th><th>Akun</th><th>Alamat IP</th></tr></thead><tbody>
+  {% for entry in log %}<tr><td>{{ entry.at | tanggal }}</td><td>{{ entry.actor or "—" }}</td><td>{{ entry.action | replace("_", " ") }}</td><td>{{ entry.target or "—" }}</td><td class="mono">{{ entry.ip or "—" }}</td></tr>
+  {% else %}<tr><td colspan="5"><div class="empty">Belum ada riwayat</div></td></tr>{% endfor %}
+  </tbody></table></div>
+</div>

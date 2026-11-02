@@ -1,0 +1,11 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+{% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
+<div class="crumbs"><a href="/containers">Container</a> › {{ state.server or "Belum terhubung" }} › <b>{{ view.name }}</b></div>
+<div class="page-head"><div><h1>{{ view.name }} {{ ui.status_pill(view) }}</h1><div class="sub">{{ state.server or "Belum terhubung" }}{% if state.info.get("ip") %} · {{ state.info.get("ip") }}{% endif %} · didaftarkan {{ state.registered_at | tanggal_saja }}</div></div>
+{% if view.status != "off" %}<div class="actions"><details class="row-menu"><summary aria-label="Aksi untuk {{ view.name }}">⋮</summary><div class="menu-pop"><button class="danger" hx-get="/containers/{{ view.name }}/disable" hx-target="#modal" hx-swap="innerHTML">Nonaktifkan</button></div></details></div>{% endif %}</div>
+{{ ui.nas_banner(nas) }}
+{% if view.status == "off" %}<div class="banner banner-warn"><b>Nonaktif{% if disabled_at %} sejak {{ disabled_at | tanggal }}{% endif %}.</b> Baris <code>{{ view.name }}</code> dikomentari di <code>config/agents.conf</code>, jadi agen ditolak (401) dan alert untuk container ini berhenti. File di NAS tidak dihapus. Mengaktifkan lagi dilakukan dengan mengedit file itu.</div>
+{% elif view.status == "wait-hb" %}<div class="banner banner-info"><b>Menunggu heartbeat pertama.</b> Container ini tampil sebagai alert sampai backup pertamanya masuk. <a href="/containers/{{ view.name }}/verify">Buka langkah verifikasi ›</a></div>
+{% elif view.status == "wait-backup" %}<div class="banner banner-info"><b>Agen terhubung, menunggu backup pertama.</b> Container ini tampil sebagai alert sampai backup pertamanya masuk.</div>{% endif %}
+<div class="filters"><div class="seg"><a class="seg-link{% if tab == 'ringkasan' %} on{% endif %}" href="/containers/{{ view.name }}">Ringkasan</a><a class="seg-link{% if tab == 'backup' %} on{% endif %}" href="/containers/{{ view.name }}/backup">Backup &amp; log</a></div></div>

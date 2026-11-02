@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}Verifikasi {{ view.name }}{% endblock %}
+{% block scripts %}<script defer src="{{ static_url('js/alpine/ui.js') }}"></script>{% endblock %}
+{% block content %}{% include "dashboard/_verify.html" %}{% endblock %}

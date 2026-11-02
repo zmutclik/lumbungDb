@@ -1,0 +1,21 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+<div {{ ui.live(request, 5) }}>
+<div class="crumbs"><a href="/containers">Container</a> › <b>Tambah container</b></div>
+<div class="page-head"><div><h1>Tambah container MariaDB</h1></div></div>
+{% include "dashboard/_wiz_steps.html" %}
+<div class="wiz-box"><h2>Verifikasi koneksi {{ view.name }}</h2><ul class="checks">
+  <li class="done"><span class="ic">✓</span><div>Terdaftar <span class="muted">{{ state.registered_at | tanggal }}</span></div></li>
+  {% if install %}{% if install.claimed_at %}<li class="done"><span class="ic">✓</span><div>Perintah pasang dijalankan <span class="muted">{{ install.claimed_at | tanggal }}</span></div></li>
+  {% elif not state.heartbeat_at %}<li class="todo"><span class="ic"></span><div>Perintah pasang belum dijalankan <span class="muted">berlaku sampai {{ install.expires_at | localtime }}</span></div></li>{% endif %}{% endif %}
+  {% if state.heartbeat_at %}<li class="done"><span class="ic">✓</span><div>Heartbeat diterima <span class="muted">server terbaca: {{ state.server or "tidak terbaca" }}{% if state.info.get("ip") %} · {{ state.info.get("ip") }}{% endif %}</span></div></li>
+  {% else %}<li class="todo"><span class="ic"><span class="spin"></span></span><div><b>Menunggu heartbeat pertama</b><span class="muted">agen mengirim heartbeat tiap 60 detik setelah container berjalan</span></div></li>{% endif %}
+  {% if state.has_any_backup %}<li class="done"><span class="ic">✓</span><div>Backup pertama diterima <span class="muted">{{ state.counts.get("fullbackup", 0) }} full · {{ state.counts.get("databases", 0) }} dump · {{ state.counts.get("binlog", 0) }} binlog</span></div></li>
+  {% else %}<li class="todo"><span class="ic">{% if state.heartbeat_at %}<span class="spin"></span>{% endif %}</span><div>Backup pertama{% if state.heartbeat_at %}<span class="muted">agen memindai file; file dikirim setelah stabil 120 detik</span>{% endif %}</div></li>{% endif %}
+</ul>
+{% if state.has_any_backup %}<div class="banner banner-ok"><b>{{ view.name }} siap dipantau.</b>{% if not state.last_full %} Status menjadi Menunggu full pertama sampai full mengikuti jadwal cron.{% endif %}</div>
+{% else %}<p class="hint">Supaya tidak menunggu jadwal, setelah heartbeat masuk pakai Backup sekarang di detail container.</p>{% endif %}
+{% if not state.heartbeat_at and view.status != "off" %}<p class="hint">Perintah hilang atau kedaluwarsa? <button class="link-btn" hx-post="/containers/{{ view.name }}/install-command" hx-target="#live" hx-swap="outerHTML" hx-confirm="Buat perintah pasang baru? Perintah sebelumnya langsung tidak berlaku.">Buat perintah baru</button></p>{% endif %}
+<div class="wiz-actions"><a class="btn btn-pri" href="/containers/{{ view.name }}/backup">Buka detail {{ view.name }}</a><a class="btn" href="/containers">{{ "Kembali ke daftar" if state.has_any_backup else "Tutup, cek nanti" }}</a></div>
+</div>
+</div>

@@ -1,0 +1,13 @@
+<h3>Backup sekarang: {{ name }}</h3>
+<form hx-post="/containers/{{ name }}/requests">
+  {% macro option(value, label, kind) %}<option value="{{ value }}"{% if kind in busy %} disabled{% endif %}>{{ label }}{% if kind in busy %} (sudah diminta){% endif %}</option>{% endmacro %}
+  <div class="field"><label for="req-what">Yang dibackup</label>
+    <select id="req-what" name="what">
+      {{ option("full", "Full", "full") }}{{ option("dump", "Dump semua database", "dump") }}
+      {% for database in databases %}{{ option("dump:" ~ database, "Dump " ~ database, "dump") }}{% endfor %}
+      {{ option("dump:_users", "Dump _users (akun dan hak akses)", "dump") }}{{ option("binlog", "Arsip binlog", "binlog") }}
+    </select></div>
+  <p class="hint"><b>Full berjalan di mesin produksi.</b> Full terakhir: {{ last_size | filesize }}{% if last_minutes is not none %}, {{ last_minutes | round | int }} menit{% endif %}. Ditolak bila sisa disk /backup kurang dari 1,2× ukuran itu.</p>
+  <p class="hint">Permintaan yang tidak diambil agen dalam 15 menit kedaluwarsa dan tidak dijalankan.</p>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Minta backup</button></div>
+</form>

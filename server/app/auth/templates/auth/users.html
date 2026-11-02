@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% set active = "settings" %}
+{% block title %}Akun admin{% endblock %}
+{% block scripts %}<script defer src="{{ static_url('js/alpine/ui.js') }}"></script>{% endblock %}
+{% block content %}{% include "auth/_users.html" %}{% endblock %}

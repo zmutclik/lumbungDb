@@ -1,0 +1,15 @@
+{% include "dashboard/_wiz_steps.html" %}
+<div class="wiz-box"><h2>Pasang {{ name }}</h2>
+<div class="once"><b>Perintah hanya ditampilkan sekali</b> dan berlaku sampai {{ expires_at | localtime }}. Bila hilang atau kedaluwarsa, buat yang baru di langkah verifikasi.</div>
+{% include "dashboard/_install_command.html" %}
+{% if token %}<details class="wiz-manual"><summary>Container lama atau pasang manual</summary>
+<div class="once"><b>Token agen hanya ditampilkan sekali.</b> Baris <code>{{ name }} = …</code> sudah ditambahkan ke <code>config/agents.conf</code>. Abaikan bagian ini bila memakai perintah di atas.</div>
+<div class="field"><label>Token agen</label><div class="copy" x-data="copyBox"><code class="tok" x-ref="source">{{ token }}</code><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+<div class="field"><label>Isi <code>.env</code> di server database</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ env }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+<div class="field"><label>Salin <code>docker-compose.lumbung.yml</code> ke server, lalu jalankan</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ command }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+<p class="hint"><b>Container lama:</b> ubah <code>IMAGE_TAG</code> ke versi MariaDB yang sedang berjalan, isi <code>CONTAINER_HOSTNAME</code> dengan hasil <code>docker exec &lt;container&gt; hostname</code>, dan pakai nama project lama pada <code>-p</code>, supaya volume data dan <code>/backup</code> yang lama tetap terpakai. MariaDB ikut restart.</p>
+</details>{% endif %}
+<div class="wiz-actions">
+  <a class="btn btn-pri" href="/containers/{{ name }}/verify">Lanjut: verifikasi ›</a>
+  <button class="link-btn danger right" hx-delete="/containers/{{ name }}/pending" hx-confirm="Batalkan pendaftaran {{ name }}? Baris agen dihapus dari agents.conf.">Batalkan pendaftaran</button></div>
+</div>

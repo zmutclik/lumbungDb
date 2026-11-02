@@ -1,0 +1,33 @@
+{% import "dashboard/_macros.html" as ui %}
+<div {{ ui.live(request) }}>
+{% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
+<div class="page-head"><div><h1>Dashboard</h1><div class="sub">{{ long_date }} · semua waktu WIB</div></div></div>
+{{ ui.nas_banner(nas) }}
+<div class="tiles tiles-3">
+  <div class="tile{% if nas.problem or nas.state == 'low' %} bad{% endif %}"><small>Ruang NAS</small>
+    {% if nas.state == "hang" %}<b>Tidak merespons</b><span class="muted">sejak {{ nas.since | tanggal }}</span>
+    {% elif nas.state == "down" %}<b>Tidak ter-mount</b><span class="muted">sejak {{ nas.since | tanggal }}</span>
+    {% elif nas.state == "unknown" %}<b>Tidak diketahui</b><span class="muted">pengecek tidak berjalan</span>
+    {% else %}<b>{{ nas.free_percent }}% bebas</b><progress class="bar-meter" max="100" value="{{ 100 - nas.free_percent }}"></progress><span class="muted">{{ nas.free | filesize }} dari {{ nas.total | filesize }}</span>{% endif %}
+  </div>
+  <a class="tile{% if problem_count %} bad{% endif %}" href="/containers"><small>Container bermasalah</small><b>{{ problem_count }} / {{ active_count }}</b><span class="muted">{{ active_count - problem_count }} sehat</span></a>
+  <a class="tile{% if alerts %} bad{% endif %}" href="/alerts"><small>Alert aktif</small><b>{{ alerts | length }}</b><span class="muted">dinilai tiap 60 detik</span></a>
+</div>
+{% if not views %}
+<div class="card mt"><div class="empty"><b>Belum ada container terdaftar</b><p>Tambahkan container pertama untuk mulai mengumpulkan backup.</p><a class="btn btn-pri" href="/containers/new">Tambah container</a></div></div>
+{% else %}
+<div class="section-title"><h2>Linimasa backup</h2><span class="muted small">lubang backup per container dan hari · {{ range_label }}</span>
+  <select class="seg-end" name="hari" aria-label="Rentang waktu" hx-get="/dashboard" hx-trigger="change" hx-target="#live" hx-swap="outerHTML">{% for option in (7, 14, 30) %}<option value="{{ option }}"{% if days == option %} selected{% endif %}>{{ option }} hari terakhir</option>{% endfor %}</select></div>
+<div class="tl"><div class="tbl-wrap"><table class="t"><thead><tr><th>Container</th>
+  {% for label in day_labels %}<th class="tl-th"><span class="tl-day">{{ label }}</span></th>{% endfor %}<th>Heartbeat</th></tr></thead><tbody>
+  {% for item, cells in timeline %}
+  <tr{% if item.status == "off" %} class="row-off"{% endif %}><td class="tl-name"><a href="/containers/{{ item.name }}/backup"><b>{{ item.name }}</b></a></td>
+    {% for cell in cells %}<td class="tl-td">{% if cell.link %}<a class="tl-cell tl-{{ cell.css }}" href="/containers/{{ item.name }}/backup?day={{ cell.day }}" title="{{ item.name }} · {{ cell.description }}" aria-label="{{ item.name }} · {{ cell.description }}">{{ cell.text }}</a>{% else %}<span class="tl-cell tl-{{ cell.css }}" title="{{ item.name }} · {{ cell.description }}"></span>{% endif %}</td>{% endfor %}
+    <td class="tl-hb{% if item.alerts | selectattr('kind', 'equalto', 'Agen') | list %} bad{% endif %}">{{ item.state.heartbeat_at | ago }}</td></tr>
+  {% endfor %}
+</tbody></table></div></div>
+<div class="legend-row"><span><i class="tl-full"></i>F = full, D = dump masuk</span><span><i class="tl-part"></i>hanya sebagian masuk</span><span><i class="tl-none"></i>tidak ada backup</span><span><i class="tl-pre"></i>belum terdaftar atau belum waktunya</span><span><i class="tl-off"></i>nonaktif</span><span>Klik sel untuk daftar file hari itu</span></div>
+{% endif %}
+<div class="section-title"><h2>Alert aktif</h2><span class="muted small">aturan biasa, bukan AI · dinilai tiap 60 detik · pengingat tiap 12 jam sampai pulih</span><a class="small seg-end" href="/alerts">Semua alert ›</a></div>
+{{ ui.alert_table(alerts, alert_since) }}
+</div>

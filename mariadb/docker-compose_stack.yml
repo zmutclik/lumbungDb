@@ -1,0 +1,51 @@
+services:
+  mariadb:
+    image: zmutclik/mariadb:12.3
+    container_name: ${CONTAINER_NAME}
+    hostname: ${HOSTNAME}
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOTPASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_APPUSER}
+      MARIADB_PASSWORD: ${DB_APPPASS}
+      BACKUP_USER: ${BACKUP_USER}
+      BACKUP_PASS: ${BACKUP_PASS}
+      BACKUP_CRON: ${BACKUP_CRON:-}
+      DUMP_CRON: ${DUMP_CRON:-}
+      BINLOG_CRON: ${BINLOG_CRON:-}
+      DB_TUNING: ${DB_TUNING:-auto}
+      DB_MEMORY: ${DB_MEMORY:-}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-200}
+      DB_DISK: ${DB_DISK:-ssd}
+      # Buat user healthcheck & jalankan mariadb-upgrade otomatis saat versi naik
+      MARIADB_AUTO_UPGRADE: "1"
+    ports:
+      - "${DATA_PORT}:3306"
+    volumes:
+      - data:/var/lib/mysql
+      - backup:/backup
+    networks:
+      net:
+    dns:
+      - ${DNS1}
+      - ${DNS2}
+    # Batas resource container, dibaca otomatis untuk tuning MariaDB
+    deploy:
+      resources:
+        limits:
+          cpus: "${DB_CPUS:-2}"
+          memory: ${DB_MEM_LIMIT:-2G}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 60s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  net:
+
+volumes:
+  data:
+  backup:

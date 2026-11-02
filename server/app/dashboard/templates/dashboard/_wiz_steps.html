@@ -1,0 +1,2 @@
+<ol class="wiz-steps">{% for label in ("Nama", "Pasang MariaDB", "Verifikasi") %}{% set n = loop.index %}
+<li class="{{ 'done' if n < step else 'now' if n == step else '' }}"><span class="wiz-step"><span class="n">{{ "✓" if n < step else n }}</span><span class="lbl">{{ label }}</span></span></li>{% endfor %}</ol>

@@ -1,0 +1,64 @@
+#!/usr/bin/python3 -I
+"""Satu-satunya jalur agen ke root. Dipanggil lewat sudo.
+
+Hanya dua aksi:
+  apply-schedule VERSI FULL DUMP BINLOG
+  run-backup full | dump [DATABASE] | binlog
+"""
+import os
+import re
+import sys
+
+sys.path.insert(0, "/opt/lumbung")
+import schedule  # noqa: E402
+
+DATABASE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+CLEAN_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
+
+
+def refuse(message):
+    print(f"lumbung-helper: {message}", file=sys.stderr)
+    sys.exit(64)
+
+
+def apply_schedule(args):
+    if len(args) != 4 or not re.fullmatch(r"[0-9]{1,9}", args[0]):
+        refuse("argumen apply-schedule tidak valid")
+    wanted = dict(zip(schedule.KINDS, args[1:]))
+    error = schedule.schedule_error(wanted)
+    if error:
+        refuse(error)
+    try:
+        schedule.apply_schedule(int(args[0]), wanted)
+    except Exception as exc:  # crontab lama tetap dipakai
+        print(f"lumbung-helper: gagal menerapkan jadwal: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def run_backup(args):
+    if not args or args[0] not in schedule.SCRIPTS:
+        refuse("jenis backup tidak dikenal")
+    kind, rest = args[0], args[1:]
+    if kind == "dump":
+        if len(rest) > 1 or (rest and not DATABASE.fullmatch(rest[0])):
+            refuse("nama database tidak valid")
+    elif rest:
+        refuse("argumen berlebih")
+    script = schedule.SCRIPTS[kind][0]
+    os.execve(script, [script, *rest], CLEAN_ENV)
+
+
+def main():
+    if len(sys.argv) < 2:
+        refuse("aksi tidak ada")
+    action, args = sys.argv[1], sys.argv[2:]
+    if action == "apply-schedule":
+        apply_schedule(args)
+    elif action == "run-backup":
+        run_backup(args)
+    else:
+        refuse("aksi tidak dikenal")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,3 @@
+<h3>Nonaktifkan {{ name }}?</h3>
+<ul><li>Baris agen diberi <code>#</code> di <code>config/agents.conf</code>, dan agen ditolak (401).</li><li>Alert untuk container ini berhenti.</li><li>File di NAS tidak dihapus. Mengaktifkan lagi lewat file itu, bukan dari dashboard.</li></ul>
+<div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-danger" hx-post="/containers/{{ name }}/disable">Nonaktifkan</button></div>

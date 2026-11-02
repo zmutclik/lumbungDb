@@ -1,0 +1,8 @@
+[mysqld]
+# Binary log untuk point-in-time recovery, diarsipkan oleh /opt/backup/binlogbackup.sh
+server_id = 1
+log_bin = mysql-bin
+# ROW: setiap perubahan baris dicatat apa adanya, hasil replay tidak bergantung pada fungsi non-deterministik
+binlog_format = ROW
+# Salinan di data volume cukup 2 hari (full backup tiap hari), arsip di /backup dihapus setelah full backup berhasil
+binlog_expire_logs_seconds = 172800

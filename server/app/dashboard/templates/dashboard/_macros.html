@@ -1,0 +1,22 @@
+{% macro live(request, seconds=60) %}id="live" data-live hx-get="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" hx-trigger="every {{ seconds }}s, live-refresh from:body" hx-target="this" hx-swap="outerHTML"{% endmacro %}
+
+{% macro nas_banner(nas) %}
+{% if nas.state == "hang" %}<div class="banner banner-bad"><b>NAS tidak merespons sejak {{ nas.since | tanggal }}.</b> Upload baru ditolak (503) dan dicoba lagi otomatis; backup baru tetap aman di server masing-masing.<p>Periksa kondisi NAS dan jaringan ke NAS. Alert dan dashboard tetap berjalan.</p></div>
+{% elif nas.state == "down" %}<div class="banner banner-bad"><b>NAS tidak ter-mount sejak {{ nas.since | tanggal }}.</b> Upload dari semua agen ditolak (503) dan dicoba lagi otomatis; backup baru tetap aman di server masing-masing.<p>Periksa mount NFS di VM LumbungDB dan pastikan file penanda <code>.lumbung-mounted</code> ada.</p></div>
+{% elif nas.state == "unknown" %}<div class="banner banner-bad"><b>Pengecek NAS dan alert tidak berjalan.</b> Upload ditolak sampai pemeriksaan NAS berjalan lagi, dan alert tidak dinilai. Periksa service <code>worker</code>.</div>
+{% elif nas.state == "low" %}<div class="banner banner-bad"><b>Ruang NAS tinggal {{ nas.free_percent }}%</b> ({{ nas.free | filesize }} dari {{ nas.total | filesize }}). Upload masih diterima, tetapi akan gagal bila ruang habis.</div>{% endif %}
+{% endmacro %}
+
+{% macro status_pill(view) %}<span class="pill pill-{{ view.pill_class }}">{{ view.pill_text }}</span>{% endmacro %}
+
+{% macro alert_table(alerts, since, show_source=true) %}
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Kondisi</th><th>Jenis</th>{% if show_source %}<th>Sumber</th>{% endif %}<th>Sejak</th></tr></thead><tbody>
+{% for alert in alerts %}
+<tr class="row-{{ alert.level }}"><td><b>{{ alert.cond }}</b>{% if alert.detail %}<br><span class="muted small">{{ alert.detail }}</span>{% endif %}</td><td>{{ alert.kind }}</td>
+{% if show_source %}<td>{% if alert.container %}<a href="/containers/{{ alert.container }}">{{ alert.container }}</a>{% else %}semua{% endif %}</td>{% endif %}
+<td>{% if since.get(alert.key) %}{{ since.get(alert.key) | tanggal }}{% else %}baru saja{% endif %}</td></tr>
+{% else %}
+<tr><td colspan="{{ 4 if show_source else 3 }}"><div class="empty"><b>Tidak ada alert aktif</b>Semua kondisi normal.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+{% endmacro %}

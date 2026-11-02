@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% set active = "containers" %}
+{% block title %}Tambah container{% endblock %}
+{% block scripts %}<script defer src="{{ static_url('js/alpine/ui.js') }}"></script>{% endblock %}
+{% block content %}
+<div class="crumbs"><a href="/containers">Container</a> › <b>Tambah container</b></div>
+<div class="page-head"><div><h1>Tambah container MariaDB</h1><div class="sub">Satu container = satu agen di dalam image dan satu token. Pendaftaran baru selesai setelah agen benar-benar terhubung dan backup pertama masuk.</div></div></div>
+<div id="wizard" data-no-refresh>{% include "dashboard/_wizard_name.html" %}</div>
+{% endblock %}

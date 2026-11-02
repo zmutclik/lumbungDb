@@ -1,0 +1,16 @@
+{% import "dashboard/_macros.html" as ui %}
+<div {{ ui.live(request) }}>
+{% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
+<div class="page-head"><div><h1>Container <span class="muted title-light">({{ views | length }} container · {{ server_count }} server)</span></h1><div class="sub">Satu container MariaDB = satu agen dan satu token.</div></div><div class="actions"><a class="btn btn-pri" href="/containers/new">+ Tambah container</a></div></div>
+{{ ui.nas_banner(nas) }}
+{% if views %}
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Container</th><th>Didaftarkan</th><th>Heartbeat</th><th>Status</th></tr></thead><tbody>
+{% for group in groups %}
+<tr class="grp-row"><td colspan="4"><b>{{ group.title }}</b>{% if group.ip %} <span class="muted">· {{ group.ip }}</span>{% endif %} <span class="muted">· {{ group.views | length }} container{% if group.problems %} · {{ group.problems }} bermasalah{% endif %}</span></td></tr>
+{% for item in group.views %}
+<tr class="row-{{ item.level }}"><td><a href="/containers/{{ item.name }}"><b>{{ item.name }}</b></a></td><td>{{ item.state.registered_at | tanggal_saja }}</td><td>{{ item.state.heartbeat_at | ago }}</td><td>{{ ui.status_pill(item) }}{% if item.status == "wait-hb" %} <a class="small" href="/containers/{{ item.name }}/verify">Lihat verifikasi ›</a>{% endif %}</td></tr>
+{% endfor %}{% endfor %}
+</tbody></table></div>
+<p class="small muted mt-s">Token tidak ditampilkan di aplikasi. Token hanya muncul sekali saat container ditambahkan.</p>
+{% else %}<div class="card"><div class="empty"><b>Belum ada container terdaftar</b>Tambahkan container pertama lewat tombol di atas.</div></div>{% endif %}
+</div>

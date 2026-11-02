@@ -1,0 +1,7 @@
+{% import "dashboard/_macros.html" as ui %}
+<div {{ ui.live(request) }}>
+{% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
+<div class="page-head"><div><h1>Alert <span class="muted">({{ alerts | length }})</span></h1><div class="sub">Dinilai tiap menit dengan aturan biasa. Satu notifikasi saat muncul, pengingat tiap 12 jam, dan satu pesan saat pulih.</div></div></div>
+{{ ui.nas_banner(nas) }}
+{{ ui.alert_table(alerts, alert_since) }}
+</div>

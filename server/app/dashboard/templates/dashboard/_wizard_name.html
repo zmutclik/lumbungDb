@@ -1,0 +1,14 @@
+{% include "dashboard/_wiz_steps.html" %}
+<div class="wiz-box"><h2>Daftarkan container baru</h2>
+<form hx-post="/containers" hx-target="#wizard" hx-swap="innerHTML">
+  <div class="field"><label for="wiz-name">Nama container</label>
+    <input type="text" id="wiz-name" name="name" value="{{ name }}" maxlength="64" placeholder="mis. radiologi-db" autocomplete="off" spellcheck="false" required autofocus{% if error %} class="invalid"{% endif %}
+      hx-post="/containers/name-check" hx-trigger="input changed delay:300ms" hx-target="#wiz-msg" hx-swap="innerHTML">
+    <div class="hint">Harus unik di seluruh LumbungDB, jadi hindari nama umum seperti <code>mariadb</code>. Huruf, angka, <code>_</code> <code>.</code> <code>-</code>; harus diawali huruf atau angka. Menjadi nama folder di NAS: <code>/lumbungdb/{{ name or "<nama>" }}/</code></div>
+    <div id="wiz-msg">{% include "dashboard/_name_check.html" %}</div></div>
+  <div class="field"><label for="wiz-port">Port di server</label>
+    <input type="number" id="wiz-port" name="port" value="{{ port or 3306 }}" min="1" max="65535" required>
+    <div class="hint">Port MariaDB di server tujuan. Script menolak bila port sudah terpakai.</div></div>
+  <p class="hint">Server tidak perlu diisi. Agen membacanya dari mesin tempat container berjalan dan mengirimnya lewat heartbeat.</p>
+  <div class="wiz-actions"><button class="btn btn-pri" id="wiz-next" type="submit"{% if error or not name %} disabled{% endif %}>Lanjut: buat perintah ›</button><a class="btn" href="/containers">Batal</a></div>
+</form></div>
