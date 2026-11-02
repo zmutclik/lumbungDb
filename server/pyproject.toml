@@ -6,7 +6,7 @@ dependencies = [
     "anyio>=4",
     "fastapi>=0.121",              # Depends(scope="function")
     "uvicorn[standard]>=0.30",
-    "sqlalchemy[asyncio]>=2.0.36",
+    "sqlalchemy[asyncio]>=2.1.6",
     "asyncmy>=0.2.10",
     "alembic>=1.14",
     "pydantic>=2.9",
