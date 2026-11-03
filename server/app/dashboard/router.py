@@ -4,6 +4,7 @@ from datetime import UTC, datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
@@ -18,6 +19,7 @@ from app.dashboard.schemas import BackupRequestForm, ContainerForm
 from app.installs import service as install_service
 from app.runner_admin import service as runner_view
 from app.runners import service as runner_service
+from app.runners import standby as standby_service
 from app.runners.dependencies import registry as runner_registry
 from app.runners.models import RunnerHeartbeat
 from app.backup_control import cron as cron_lib
@@ -408,6 +410,106 @@ async def test_run_now(name: str, user: CurrentUserDep, db: DbSession):
     except runner_service.RunnerError as err:
         raise HTTPException(status_code=err.status_code, detail=err.detail) from err
     return _done(f"Uji restore diminta, menunggu runner {runner}.", modal=False)
+
+
+# ---------- database cadangan ----------
+STANDBY_FULL_MODES = ("off", "day", "week", "custom")
+STANDBY_BINLOG_MODES = ("off", "mins", "hours", "custom")
+
+
+@router.get("/containers/{name}/cadangan")
+async def container_standby(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    context = await _detail_context(db, user, name, "cadangan")
+    cfg = await runner_view.container_settings(db, name)
+    state = await runner_view.standby_state(db, name)
+    full_expr = (cfg.standby_full_schedule if cfg else None) or settings.STANDBY_FULL_DEFAULT
+    binlog_expr = (cfg.standby_binlog_schedule if cfg else None) or settings.STANDBY_BINLOG_DEFAULT
+    beat = await db.get(RunnerHeartbeat, state.runner) if state and state.runner else None
+    context.update(
+        cfg=cfg, standby=state, runs=await runner_view.standby_runs(db, name),
+        full_label=cron_lib.label(full_expr), binlog_label=cron_lib.label(binlog_expr),
+        standby_server=beat.server if beat else None,
+        broken=bool(state and state.applied_binlog_no is None and state.full_backup_id is not None),
+        runner_names=sorted(runner_registry.entries().active),
+    )
+    return render(request, "dashboard/container.html", "runners/_container_standby.html", context)
+
+
+async def _standby_form(request, db, name, form, *, status_code=200, error=None, headers=None):
+    cfg = await runner_view.container_settings(db, name)
+    if form is None:
+        values = {
+            "enabled": bool(cfg and cfg.standby_enabled), "runner": (cfg.standby_runner if cfg else "") or "",
+            "full": runner_view.schedule_form((cfg.standby_full_schedule if cfg else None) or settings.STANDBY_FULL_DEFAULT,
+                                              STANDBY_FULL_MODES),
+            "binlog": runner_view.schedule_form(
+                (cfg.standby_binlog_schedule if cfg else None) or settings.STANDBY_BINLOG_DEFAULT, STANDBY_BINLOG_MODES),
+        }
+    else:
+        def part(kind, modes):
+            parsed = runner_view.schedule_form(view.cron_from_form(kind, form), modes)
+            parsed.update(mode=str(form.get(f"{kind}_mode", parsed["mode"])), time=str(form.get(f"{kind}_time", "03:00")),
+                          dow=str(form.get(f"{kind}_dow", "0")), cron=str(form.get(f"{kind}_cron", "")),
+                          every=str(form.get(f"{kind}_every", parsed["every"])))
+            return parsed
+        values = {"enabled": form.get("enabled") == "1", "runner": str(form.get("runner", "")),
+                  "full": part("sfull", STANDBY_FULL_MODES), "binlog": part("sbinlog", STANDBY_BINLOG_MODES)}
+    return templates.TemplateResponse(
+        request=request, name="runners/_standby_settings.html", status_code=status_code, headers=headers or {},
+        context={"name": name, "values": values, "error": error, "day_names": view.DAY_NAMES,
+                 "runner_names": sorted(runner_registry.entries().active)})
+
+
+@router.get("/containers/{name}/cadangan/edit")
+async def standby_settings_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _standby_form(request, db, name, None)
+
+
+@router.post("/containers/{name}/cadangan/preview")
+async def standby_settings_preview(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _standby_form(request, db, name, await request.form())
+
+
+@router.put("/containers/{name}/cadangan")
+async def standby_settings_save(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    form = await request.form()
+    try:
+        await runner_view.save_standby_settings(
+            db, name, enabled=form.get("enabled") == "1", runner=str(form.get("runner", "")),
+            full_schedule=view.cron_from_form("sfull", form), binlog_schedule=view.cron_from_form("sbinlog", form))
+    except runner_view.SettingsError as err:
+        if err.status_code == 422:
+            return await _standby_form(request, db, name, form, status_code=422, error=err.detail,
+                                       headers={"HX-Retarget": "#standby-settings-form", "HX-Reswap": "outerHTML"})
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done("Pengaturan database cadangan disimpan.")
+
+
+@router.get("/containers/{name}/cadangan/restore")
+async def standby_restore_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    cfg = await runner_view.container_settings(db, name)
+    return templates.TemplateResponse(request=request, name="runners/_standby_restore.html", context={
+        "name": name, "runner_names": sorted(runner_registry.entries().active),
+        "current": cfg.standby_runner if cfg else None})
+
+
+@router.post("/containers/{name}/cadangan/restore")
+async def standby_restore_now(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    """Restore sekarang. Tidak pernah memulihkan ke database produksi, dan tidak menunggu jadwal."""
+    form = await request.form()
+    runner = str(form.get("runner", ""))
+    if runner not in runner_registry.entries().active:
+        raise HTTPException(status_code=422, detail="Pilih runner yang aktif.")
+    async with db.begin():
+        beat_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
+        own_machine = await container_service.machine_id(db, name)
+    if beat_machine and own_machine and beat_machine == own_machine:
+        raise HTTPException(status_code=409, detail="Runner ini satu server dengan container; pilih runner di server lain.")
+    try:
+        await standby_service.create_full_job(db, name, runner, requested_by=user.username)
+    except runner_service.RunnerError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done(f"Restore diminta, menunggu runner {runner}.")
 
 
 # ---------- permintaan backup ----------

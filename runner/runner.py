@@ -5,10 +5,12 @@ dalam image MariaDB lewat `docker run`, jadi mesin runner hanya butuh Docker.
 Hasil tugas ada tiga. "Gagal" berarti backup-nya yang bermasalah (file rusak, prepare gagal, tabel tidak terbaca).
 "Tidak terlaksana" berarti runner yang bermasalah (unduhan putus, Docker error, scratch penuh): backup tidak dicap gagal."""
 import argparse
+import glob
 import hashlib
 import http.client
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -360,6 +362,276 @@ class Restorer:
             self._remove(name)
 
 
+STANDBY_LABEL = "lumbung.standby=1"
+DEFAULT_STANDBY_PORT = 33100
+BINLOG_NAME = re.compile(r"mysql-bin\.(\d+)")
+
+
+def standby_container(container):
+    return f"lumbung-standby-{container}"
+
+
+class StandbyRunner(Restorer):
+    """Memulihkan full + binlog menjadi database cadangan yang tetap hidup, atau menerapkan binlog baru ke database
+    cadangan yang ada. Folder per container: current/ (datadir hidup), new/ (sedang disiapkan), password akun runner
+    di current.pw dan new.pw (izin 600, tidak pernah dikirim ke LumbungDB)."""
+
+    def __init__(self, config, client, job, runner=run, progress=None):
+        super().__init__(config, client, job, runner, progress)
+        self.base = os.path.join(config["scratch_dir"], "standby", job["container"])
+        self.work = self.base           # alat dijalankan dengan folder ini sebagai /work
+        self.name = standby_container(job["container"])
+        self.extra = {}
+
+    # ---------- bantuan ----------
+    def _paths(self, which):
+        return os.path.join(self.base, which), os.path.join(self.base, f"{which}.pw")
+
+    def _password(self, which):
+        with open(self._paths(which)[1]) as handle:
+            return handle.read().strip()
+
+    def _port(self):
+        known = (self.job.get("standby") or {}).get("port")
+        if known:
+            return known
+        used = set()
+        parent = os.path.dirname(self.base)
+        for entry in os.listdir(parent) if os.path.isdir(parent) else []:
+            try:
+                with open(os.path.join(parent, entry, "state.json")) as handle:
+                    used.add(json.load(handle).get("port"))
+            except (OSError, ValueError):
+                continue
+        port = self.config.get("standby_port_base", DEFAULT_STANDBY_PORT)
+        while port in used:
+            port += 1
+        return port
+
+    def _write_state(self, port):
+        with open(os.path.join(self.base, "state.json"), "w") as handle:
+            json.dump({"port": port}, handle)
+
+    def _exec(self, container, password, sql=None, stdin_path=None):
+        args = ["docker", "exec", *(["-i"] if stdin_path else []), "-e", f"MYSQL_PWD={password}", container, "mariadb",
+                "-S", SOCKET, "-ulumbung_runner", "-BN"]
+        if sql is not None:
+            args += ["-e", sql]
+        return self.run(args, 7200, stdin_path)
+
+    def _wait_account(self, container, password):
+        for _ in range(self.config["ready_seconds"]):
+            code, out, _ = self._exec(container, password, "SELECT 1")
+            if code == 0 and out.strip() == "1":
+                return
+            time.sleep(1)
+        _, logs, err = self.run(["docker", "logs", "--tail", "15", container])
+        raise Failed("MariaDB tidak naik", (logs + err).strip()[-LOG_LIMIT:])
+
+    def _mariadbd(self, name, datadir, label, extra_args, extra_docker=()):
+        full = name
+        code, _, err = self.run(["docker", "run", "-d", "--name", full, "--label", label, *extra_docker,
+                                 "--entrypoint", "mariadbd", "-v", f"{datadir}:/var/lib/mysql", self.config["image"],
+                                 "--user=mysql", f"--socket={SOCKET}", "--event-scheduler=OFF", "--log-bin=OFF",
+                                 *extra_args])
+        if code != 0:
+            raise NotRun(f"jalankan {name}", err.strip()[-300:])
+        return full
+
+    def _stop(self, name):
+        self.run(["docker", "stop", "-t", "120", name], 180)
+        self.run(["docker", "rm", "-f", "-v", name])
+
+    def _binlog_entries(self):
+        return sorted((f for f in self.job["files"] if f["kind"] == "binlog"), key=lambda f: f["binlog_no"])
+
+    def _apply_binlogs(self, container, password, entries, start_position=None, first_name=None):
+        """Binlog dibuka dan diubah jadi SQL di alat, lalu dimasukkan lewat akun runner. Penerapan ditandai dulu: bila
+        runner mati di tengah, penerapan berikutnya menolak, karena sebagian perubahan sudah masuk."""
+        if not entries:
+            return None
+        names = []
+        for entry in entries:
+            source = self._fetch(entry)
+            number = f"{entry['binlog_no']:06d}"
+            decoded = f"binlog/mysql-bin.{number}"
+            os.makedirs(os.path.join(self.base, "binlog"), exist_ok=True)
+            self._decrypt(source, os.path.join(self.base, decoded))
+            names.append(f"/work/{decoded}")
+        position = f"--start-position={start_position} " if start_position else ""
+        self.progress("ubah binlog menjadi SQL")
+        code, _, err = self._tool(f"set -eo pipefail; mariadb-binlog {position}{' '.join(names)} > /work/apply.sql")
+        if code != 0:
+            raise Failed("baca binlog", err.strip()[-LOG_LIMIT:])
+        marker = os.path.join(self.base, "applying")
+        with open(marker, "w") as handle:
+            handle.write(str(self.job["id"]))
+        self.progress("terapkan binlog")
+        code, _, err = self._exec(container, password, stdin_path=os.path.join(self.base, "apply.sql"))
+        if code != 0:
+            raise Failed("terapkan binlog", err.strip()[-LOG_LIMIT:])
+        os.unlink(marker)
+        return entries[-1]["binlog_no"]
+
+    # ---------- pemulihan full ----------
+    def restore_full(self):
+        fulls = [f for f in self.job["files"] if f["kind"] == "fullbackup"]
+        if len(fulls) != 1:
+            raise NotRun("tugas", "tugas harus berisi tepat satu full")
+        full = fulls[0]
+        new_dir, new_pw = self._paths("new")
+        cur_dir, cur_pw = self._paths("current")
+        purge_dir(new_dir, self.config, self.run)
+        os.makedirs(new_dir, exist_ok=True)
+        source = self._fetch(full)
+        self.progress("ekstrak dan prepare full")
+        stream = os.path.join(self.base, "full.xbstream")
+        self._decrypt(source, stream)
+        code, _, err = self._tool("set -e; mbstream -x -C /work/new < /work/full.xbstream && "
+                                  "mariadb-backup --prepare --target-dir=/work/new > /work/prepare.log 2>&1 "
+                                  "|| { tail -5 /work/prepare.log; exit 2; }; chown -R mysql:mysql /work/new")
+        if code != 0:
+            raise Failed("prepare", (err or "mariadb-backup --prepare gagal").strip()[-LOG_LIMIT:])
+        os.unlink(stream)
+        # Dibaca lewat alat: isi folder dimiliki mysql dan tidak terbaca oleh user runner di host.
+        code, out, _ = self._tool("cat /work/new/mariadb_backup_binlog_info")
+        parts = out.split() if code == 0 else []
+        position = parts[1] if len(parts) >= 2 and parts[1].isdigit() else None
+        if self._binlog_entries() and position is None:
+            raise Failed("posisi binlog", "mariadb_backup_binlog_info tidak terbaca; binlog tidak diterapkan dari awal file")
+        self.progress(f"posisi awal binlog {position}")
+        password = secrets.token_hex(16)
+        self.progress("buat akun runner")
+        temp = self._mariadbd(f"{self.name}-akun", new_dir, LABEL, ["--skip-grant-tables", "--skip-networking"],
+                              ["--network", "none"])
+        self.containers.append(temp)
+        self._wait_ready(temp)
+        sql = ("FLUSH PRIVILEGES; "
+               f"CREATE USER 'lumbung_runner'@'localhost' IDENTIFIED BY '{password}'; "
+               "GRANT ALL PRIVILEGES ON *.* TO 'lumbung_runner'@'localhost' WITH GRANT OPTION;")
+        code, _, err = self._sql(temp, sql)
+        if code != 0:
+            raise Failed("buat akun runner", err.strip()[-300:])
+        self._stop(temp)
+        self.containers.remove(temp)
+        fd = os.open(new_pw, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(password)
+
+        check = self._mariadbd(f"{self.name}-uji", new_dir, LABEL, ["--skip-networking", "--read-only"],
+                               ["--network", "none"])
+        self.containers.append(check)
+        self._wait_account(check, password)
+        applied = self._apply_binlogs(check, password, self._binlog_entries(), position)
+        self._verify_tables(check, password)
+        self._stop(check)
+        self.containers.remove(check)
+        port = self._swap(new_dir, new_pw, cur_dir, cur_pw, password)
+        self.extra = {"standby": {"full_backup_id": full["id"], "applied_binlog_no": applied
+                                  if applied is not None else _binlog_number(full.get("binlog_start")) - 1
+                                  if _binlog_number(full.get("binlog_start")) is not None else None, "port": port}}
+
+    def _verify_tables(self, container, password):
+        schemas = ",".join(f"'{s}'" for s in SYSTEM_SCHEMAS)
+        code, out, err = self._exec(container, password, "SELECT table_schema, table_name FROM information_schema.tables "
+                                    f"WHERE table_type='BASE TABLE' AND table_schema NOT IN ({schemas}) "
+                                    "ORDER BY data_length DESC")
+        if code != 0:
+            raise Failed("daftar tabel", err.strip()[-300:])
+        per_db = {}
+        for line in out.splitlines():
+            schema, _, table = line.partition("\t")
+            per_db.setdefault(schema, []).append(table)
+        for schema, tables in per_db.items():
+            for table in tables[:MAIN_TABLES]:
+                code, _, err = self._exec(container, password, f"SELECT COUNT(*) FROM `{schema}`.`{table}`")
+                if code != 0:
+                    raise Failed(f"baca {schema}.{table}", err.strip()[-300:])
+
+    def _swap(self, new_dir, new_pw, cur_dir, cur_pw, password):
+        """Database cadangan lama baru diganti setelah yang baru terbukti naik; bila gagal, yang lama dihidupkan lagi."""
+        port = self._port()
+        old_dir, old_pw = os.path.join(self.base, "old"), os.path.join(self.base, "old.pw")
+        had_old = os.path.isdir(cur_dir)
+        purge_dir(old_dir, self.config, self.run)
+        if had_old:
+            self._stop(self.name)
+            os.rename(cur_dir, old_dir)
+            if os.path.exists(cur_pw):
+                os.rename(cur_pw, old_pw)
+        os.rename(new_dir, cur_dir)
+        os.rename(new_pw, cur_pw)
+        bind = self.config.get("standby_bind", "127.0.0.1")
+        try:
+            self._mariadbd(self.name, cur_dir, STANDBY_LABEL, ["--read-only", "--bind-address=0.0.0.0"],
+                           ["--restart", "unless-stopped", "-p", f"{bind}:{port}:3306"])
+            self._wait_account(self.name, password)
+        except NotRun:
+            self._stop(self.name)
+            purge_dir(cur_dir, self.config, self.run)
+            if os.path.exists(cur_pw):
+                os.unlink(cur_pw)
+            if had_old:
+                os.rename(old_dir, cur_dir)
+                os.rename(old_pw, cur_pw)
+                self.run(["docker", "run", "-d", "--name", self.name, "--label", STANDBY_LABEL, "--restart",
+                          "unless-stopped", "-p", f"{bind}:{port}:3306", "--entrypoint", "mariadbd", "-v",
+                          f"{cur_dir}:/var/lib/mysql", self.config["image"], "--user=mysql", f"--socket={SOCKET}",
+                          "--event-scheduler=OFF", "--log-bin=OFF", "--read-only", "--bind-address=0.0.0.0"])
+            raise
+        self._write_state(port)
+        purge_dir(old_dir, self.config, self.run)
+        if os.path.exists(old_pw):
+            os.unlink(old_pw)
+        return port
+
+    # ---------- penerapan binlog ----------
+    def apply_binlogs(self):
+        cur_dir, _ = self._paths("current")
+        if not os.path.isdir(cur_dir):
+            raise NotRun("database cadangan", "belum ada database cadangan di runner ini")
+        if os.path.exists(os.path.join(self.base, "applying")):
+            raise Failed("terputus saat menerapkan", "penerapan sebelumnya terputus; tunggu pemulihan full berikutnya")
+        code, out, _ = self.run(["docker", "inspect", "-f", "{{.State.Running}}", self.name])
+        if code != 0 or out.strip() != "true":
+            raise NotRun("database cadangan", "container database cadangan tidak berjalan")
+        password = self._password("current")
+        applied = self._apply_binlogs(self.name, password, self._binlog_entries())
+        self.extra = {"standby": {"applied_binlog_no": applied}}
+
+    def execute(self):
+        os.makedirs(self.base, exist_ok=True)
+        started = time.time()
+        item = {"kind": "full", "backup_id": None, "database": None}
+        try:
+            free = shutil.disk_usage(self.config["scratch_dir"]).free
+            need = sum(f["size"] for f in self.job["files"] if f["kind"] == "fullbackup") * 6
+            if free < need:
+                raise NotRun("scratch", f"ruang scratch {free} byte, perlu sekitar {need}")
+            if self.job["kind"] == "standby_full":
+                self.restore_full()
+            else:
+                self.apply_binlogs()
+            status, note = "Lolos", None
+        except Failed as exc:
+            status, note = "Gagal", f"{exc.step}: {exc.message}"[:500]
+        except NotRun as exc:
+            status, note = "Tidak terlaksana", f"{exc.step}: {exc.message}"[:500]
+        finally:
+            self._remove_all()
+            for leftover in ("binlog", "new", "apply.sql", "full.xbstream", "prepare.log"):
+                path = os.path.join(self.base, leftover)
+                if os.path.isdir(path):
+                    purge_dir(path, self.config, self.run)
+                elif os.path.exists(path):
+                    os.unlink(path)
+            for entry in glob.glob(os.path.join(self.base, "dl-*")):
+                os.unlink(entry)
+        item["duration_seconds"] = int(time.time() - started)
+        self.note = note
+        return status, []
+
+
 def _binlog_number(name):
     if not name:
         return None
@@ -427,11 +699,16 @@ class Runner:
             self.client.json("POST", f"/api/runner/jobs/{job['id']}/progress", {"step": step[:200]})
 
         try:
-            status, results = Restorer(self.config, self.client, job, self.run, progress).execute()
-            note = None
+            if job["kind"] in ("standby_full", "standby_apply"):
+                worker = StandbyRunner(self.config, self.client, job, self.run, progress)
+                status, results = worker.execute()
+                note, extra = worker.note, worker.extra
+            else:
+                status, results = Restorer(self.config, self.client, job, self.run, progress).execute()
+                note, extra = None, {}
         except Exception as exc:     # kesalahan runner sendiri tidak boleh menghentikan loop
-            status, results, note = "Tidak terlaksana", [], f"{type(exc).__name__}: {exc}"[:500]
-        self.pending_result = (job["id"], {"status": status, "note": note, "results": results})
+            status, results, note, extra = "Tidak terlaksana", [], f"{type(exc).__name__}: {exc}"[:500], {}
+        self.pending_result = (job["id"], {"status": status, "note": note, "results": results, **extra})
         self.flush_result()
         log(f"tugas {job['id']} selesai: {status}")
         return True
@@ -465,6 +742,8 @@ def load_config():
         "version": os.environ.get("RUNNER_VERSION", "dev"),
         "poll_seconds": max(1, int_env("POLL_SECONDS", 15)),
         "ready_seconds": max(5, int_env("READY_SECONDS", 180)),
+        "standby_port_base": int_env("STANDBY_PORT_BASE", DEFAULT_STANDBY_PORT),
+        "standby_bind": os.environ.get("STANDBY_BIND_ADDRESS", "127.0.0.1"),
     }
 
 

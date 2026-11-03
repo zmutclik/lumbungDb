@@ -61,3 +61,7 @@ async def cancel_pending(db: AsyncSession, name: str) -> bool:
         await db.execute(delete(ControlLog).where(ControlLog.container == name))   # hanya catatan perintah pasang
         await db.execute(delete(Container).where(Container.name == name))
     return True
+
+
+async def machine_id(db: AsyncSession, name: str) -> str | None:
+    return await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == name))

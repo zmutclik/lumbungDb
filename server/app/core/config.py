@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     RUNNER_MAX_TOTAL: int = 2                 # tugas berjalan bersamaan di semua runner
     DEFAULT_RUNNER: str = ""                  # runner uji dan cadangan untuk container baru; kosong = diatur manual
     RESTORE_TEST_DEFAULT: str = "30 3 * * 0"   # jadwal uji bawaan: tiap Minggu 03:30 (jam DISPLAY_TIMEZONE)
+    STANDBY_FULL_DEFAULT: str = "0 3 * * *"      # pemulihan full database cadangan: tiap hari 03:00
+    STANDBY_BINLOG_DEFAULT: str = "0 * * * *"    # penerapan binlog baru: tiap jam
     JOB_TIMEOUT_MINUTES: int = 60             # diperpanjang tiap laporan langkah
     DATA_DIR: str = "/data"              # mount NFS
     MOUNT_MARKER: str = ".lumbung-mounted"   # kosong = cek penanda dimatikan

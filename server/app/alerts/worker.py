@@ -40,6 +40,7 @@ async def tick(factory: async_sessionmaker, monitor: NasMonitor, client: httpx.A
         await runner_service.expire_jobs(db)
         await runner_scheduling.ensure_defaults(db)
         await runner_scheduling.schedule_due_tests(db)
+        await runner_scheduling.schedule_standby(db)
         await alert_service.run_check(db, client)
         await report_service.publish_due(db, client)
 

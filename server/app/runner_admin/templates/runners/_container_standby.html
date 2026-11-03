@@ -1,0 +1,34 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+<div {{ ui.live(request) }}>
+{% include "dashboard/_container_head.html" %}
+{% set can_write = view.status != "off" %}
+{% if not cfg or not cfg.standby_enabled %}<div class="banner banner-info"><b>Database cadangan belum dinyalakan.</b> Salinan yang siap dipakai saat downtime dipulihkan dari backup di mesin runner, bukan dari server database. Nyalakan lewat Ubah, atau pakai Restore sekarang untuk sekali jalan.</div>{% endif %}
+{% if broken %}<div class="banner banner-bad"><b>Penerapan binlog terhenti.</b> Penerapan terakhir gagal atau terputus di tengah, jadi binlog tidak diterapkan lagi sampai pemulihan full berikutnya.</div>{% endif %}
+<div class="card card-pad">
+  <div class="page-head"><div><h2>Database cadangan</h2></div>
+  {% if can_write %}<div class="actions"><button class="btn" hx-get="/containers/{{ view.name }}/cadangan/edit" hx-target="#modal" hx-swap="innerHTML">Ubah</button>
+  <button class="btn btn-pri" hx-get="/containers/{{ view.name }}/cadangan/restore" hx-target="#modal" hx-swap="innerHTML">Restore sekarang</button></div>{% endif %}</div>
+  <dl class="kv">
+    <dt>Kondisi</dt><dd>{% if standby %}<span class="pill pill-{{ 'bad' if broken else 'ok' }}">{{ "Terhenti" if broken else "Siap" }}</span>{% else %}<span class="pill pill-off">Belum ada</span>{% endif %}</dd>
+    <dt>Data sampai</dt><dd>{% if standby and standby.data_until %}{{ standby.data_until | tanggal }} · {{ standby.data_until | ago }}{% else %}—{% endif %}</dd>
+    <dt>Full yang dipakai</dt><dd>{% if standby and standby.restored_at %}dipulihkan {{ standby.restored_at | tanggal }}{% else %}—{% endif %}</dd>
+    <dt>Lokasi</dt><dd>{% if standby and standby.port %}{{ standby_server or standby.runner }}:{{ standby.port }} <span class="muted small">(read-only, hanya untuk admin)</span>{% else %}—{% endif %}</dd>
+    <dt>Runner cadangan</dt><dd>{{ (cfg.standby_runner if cfg else None) or "—" }}</dd>
+    <dt>Jadwal</dt><dd>Full: {{ full_label }} · Binlog: {{ binlog_label }}{% if not cfg or not cfg.standby_enabled %} <span class="muted small">(mati)</span>{% endif %}</dd>
+  </dl>
+  <p class="hint">Database cadangan selalu tertinggal dari produksi, karena binlog baru diterapkan setelah terkirim ke NAS. Untuk selisih detik, gunakan replika MariaDB.</p>
+</div>
+<h2 class="section">Riwayat restore</h2>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Waktu</th><th>Jenis</th><th>Runner</th><th>Hasil</th><th>Keterangan</th></tr></thead><tbody>
+{% for run in runs %}
+<tr><td>{{ run.at | tanggal }}</td>
+  <td>{{ "Full + binlog" if run.kind == "full" else "Binlog baru" }}{% if run.manual %} <span class="pill pill-wait">Manual</span>{% endif %}</td>
+  <td>{{ run.runner }}</td>
+  <td><span class="pill pill-{{ 'ok' if run.status == 'Lolos' else 'bad' if run.status == 'Gagal' else 'warn' }}">{{ run.status }}</span></td>
+  <td class="small">{{ run.note or "" }}</td></tr>
+{% else %}
+<tr><td colspan="5"><div class="empty"><b>Belum ada restore</b>Nyalakan database cadangan atau tekan Restore sekarang.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+</div>

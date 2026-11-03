@@ -1,4 +1,4 @@
 {% extends "base.html" %}
 {% set active = "containers" %}
 {% block title %}{{ view.name }}{% endblock %}
-{% block content %}{% include "dashboard/_container_summary.html" if tab == "ringkasan" else "runners/_container_tests.html" if tab == "uji" else "dashboard/_container_backup.html" %}{% endblock %}
+{% block content %}{% include "dashboard/_container_summary.html" if tab == "ringkasan" else "runners/_container_tests.html" if tab == "uji" else "runners/_container_standby.html" if tab == "cadangan" else "dashboard/_container_backup.html" %}{% endblock %}

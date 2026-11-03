@@ -11,9 +11,9 @@ from app.alerts.rules import AlertItem
 from app.backup_control import cron
 from app.containers.models import Container, Heartbeat
 from app.core.config import settings
-from app.runners import service
+from app.runners import service, standby
 from app.runners.dependencies import registry as runners
-from app.runners.models import ContainerSettings, Job, RunnerHeartbeat
+from app.runners.models import ContainerSettings, Job, RunnerHeartbeat, Standby
 
 logger = logging.getLogger(__name__)
 ACTIVE_JOB = (service.STATUS_WAITING, service.STATUS_RUNNING)
@@ -68,6 +68,49 @@ async def schedule_due_tests(db: AsyncSession) -> list[int]:
             logger.info("restore_test_skipped", extra={"container": container})
             continue
         created.append(job.id)
+    return created
+
+
+async def schedule_standby(db: AsyncSession) -> list[int]:
+    """Pemulihan full dan penerapan binlog untuk container yang database cadangannya diaktifkan. Pemulihan pertama
+    langsung dibuat; sesudahnya mengikuti jadwal. Satu tugas database cadangan per container pada satu waktu."""
+    async with db.begin():
+        now = _local(await db.scalar(select(func.now())))
+        rows = [(r.container, r.standby_runner, r.standby_full_schedule or settings.STANDBY_FULL_DEFAULT,
+                 r.standby_binlog_schedule or settings.STANDBY_BINLOG_DEFAULT)
+                for r in await db.scalars(select(ContainerSettings).where(
+                    ContainerSettings.standby_enabled.is_(True), ContainerSettings.standby_runner.is_not(None)))]
+        last: dict[tuple[str, str], datetime] = {
+            (c, k): t for c, k, t in (await db.execute(
+                select(Job.container, Job.kind, func.max(Job.created_at)).where(Job.kind.in_(standby.KINDS))
+                .group_by(Job.container, Job.kind))).all()}
+        have = set(await db.scalars(select(Standby.container)))
+    created = []
+    active_agents, active_runners = agents.entries().active, runners.entries().active
+    for container, runner, full_expr, binlog_expr in rows:
+        if container not in active_agents or runner not in active_runners:
+            continue
+        last_full = last.get((container, standby.KIND_FULL))
+        try:
+            full_due = last_full is None and container not in have
+            if not full_due and last_full is not None and full_expr != "off":
+                due = cron.next_run(full_expr, _local(last_full))
+                full_due = due is not None and due <= now
+            if full_due:
+                job = await standby.create_full_job(db, container, runner)
+            else:
+                last_apply = max((t for k in standby.KINDS if (t := last.get((container, k)))), default=None)
+                if container not in have or binlog_expr == "off":
+                    continue
+                due = cron.next_run(binlog_expr, _local(last_apply)) if last_apply else now
+                if due is None or due > now:
+                    continue
+                job = await standby.create_apply_job(db, container, runner)
+        except service.RunnerError:
+            logger.info("standby_skipped", extra={"container": container})
+            continue
+        if job is not None:
+            created.append(job.id)
     return created
 
 

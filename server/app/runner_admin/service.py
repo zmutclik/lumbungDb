@@ -74,15 +74,25 @@ async def container_settings(db: AsyncSession, container: str) -> ContainerSetti
     return await db.get(ContainerSettings, container)
 
 
-def schedule_form(expr: str | None) -> dict:
-    """Nilai awal form dari cron yang tersimpan."""
+def schedule_form(expr: str | None, allowed: tuple[str, ...] = ("off", "day", "week", "custom")) -> dict:
+    """Nilai awal form dari cron yang tersimpan. Bentuk yang tidak ada di `allowed` tampil sebagai kustom."""
+    base = {"mode": "off", "time": "03:30", "dow": "0", "cron": "", "every": "15"}
     if not expr or expr == "off":
-        return {"mode": "off", "time": "03:30", "dow": "0", "cron": ""}
+        return base
+    found = {**base, "mode": "custom", "cron": expr}
     if m := re.fullmatch(r"(\d+) (\d+) \* \* \*", expr):
-        return {"mode": "day", "time": f"{int(m[2]):02}:{int(m[1]):02}", "dow": "0", "cron": expr}
-    if m := re.fullmatch(r"(\d+) (\d+) \* \* ([0-6])", expr):
-        return {"mode": "week", "time": f"{int(m[2]):02}:{int(m[1]):02}", "dow": m[3], "cron": expr}
-    return {"mode": "custom", "time": "03:30", "dow": "0", "cron": expr}
+        found.update(mode="day", time=f"{int(m[2]):02}:{int(m[1]):02}")
+    elif m := re.fullmatch(r"(\d+) (\d+) \* \* ([0-6])", expr):
+        found.update(mode="week", time=f"{int(m[2]):02}:{int(m[1]):02}", dow=m[3])
+    elif m := re.fullmatch(r"0 \*/(\d+) \* \* \*", expr):
+        found.update(mode="hours", every=m[1])
+    elif expr == "0 * * * *":
+        found.update(mode="mins", every="60")
+    elif m := re.fullmatch(r"\*/(\d+) \* \* \* \*", expr):
+        found.update(mode="mins", every=m[1])
+    if found["mode"] not in allowed:
+        found["mode"] = "custom"
+    return found
 
 
 class SettingsError(Exception):
@@ -131,3 +141,43 @@ async def last_outcome(db: AsyncSession, container: str) -> tuple[Job | None, da
     passed = await db.scalar(select(func.max(Job.finished_at)).where(
         Job.container == container, Job.kind == "restore_test", Job.status == "Lolos"))
     return job, passed
+
+
+# ---------- database cadangan ----------
+async def standby_state(db: AsyncSession, container: str):
+    from app.runners.models import Standby
+    return await db.get(Standby, container)
+
+
+async def standby_runs(db: AsyncSession, container: str, limit: int = 10):
+    from app.runners.models import StandbyRun
+    return list(await db.scalars(
+        select(StandbyRun).where(StandbyRun.container == container).order_by(StandbyRun.id.desc()).limit(limit)))
+
+
+async def save_standby_settings(db: AsyncSession, container: str, *, enabled: bool, runner: str,
+                                full_schedule: str, binlog_schedule: str) -> None:
+    if container not in agents.entries().active:
+        raise SettingsError("Container nonaktif.", 409)
+    if runner and runner not in runners.entries().active:
+        raise SettingsError("Runner tidak dikenal atau nonaktif.")
+    if enabled and not runner:
+        raise SettingsError("Pilih runner cadangan sebelum menyalakan database cadangan.")
+    for value in (full_schedule, binlog_schedule):
+        if not cron.is_valid(value):
+            raise SettingsError("Jadwal bukan cron 5 kolom yang valid, atau tidak pernah berjalan.")
+    async with db.begin():
+        if runner:
+            beat_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
+            from app.containers.models import Heartbeat
+            own_machine = await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == container))
+            if beat_machine and own_machine and beat_machine == own_machine:
+                raise SettingsError("Runner ini satu server dengan container; pilih runner di server lain.")
+        row = await db.get(ContainerSettings, container, with_for_update=True)
+        if row is None:
+            row = ContainerSettings(container=container, test_full=True)
+            db.add(row)
+        row.standby_enabled = enabled
+        row.standby_runner = runner or None
+        row.standby_full_schedule = full_schedule
+        row.standby_binlog_schedule = binlog_schedule

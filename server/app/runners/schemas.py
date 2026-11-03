@@ -25,7 +25,14 @@ class TestResultIn(BaseModel):
     log: str | None = Field(default=None, max_length=8000)
 
 
+class StandbyResultIn(BaseModel):
+    full_backup_id: int | None = None          # full yang dipulihkan; kosong untuk penerapan binlog saja
+    applied_binlog_no: int | None = Field(default=None, ge=0)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+
 class JobResultIn(BaseModel):
     status: Literal["Lolos", "Gagal", "Tidak terlaksana"]
     note: str | None = Field(default=None, max_length=500)
     results: list[TestResultIn] = Field(default=[], max_length=500)
+    standby: StandbyResultIn | None = None

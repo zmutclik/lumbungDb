@@ -146,3 +146,73 @@ async def test_history_shows_results_and_escapes_logs(client, world):
 
 async def test_alert_menu_shows_runner_alert(client, world):
     assert "Runner runner-1 belum mengirim heartbeat" in (await client.get("/alerts")).text
+
+
+# ---------- tab Cadangan ----------
+async def test_standby_tab_renders_empty_and_has_nav_tab(client, world):
+    page = await client.get(f"/containers/{NAME}/cadangan")
+    assert page.status_code == 200 and "Database cadangan belum dinyalakan" in page.text and "Belum ada" in page.text
+    assert "/cadangan\">Cadangan</a>" in (await client.get(f"/containers/{NAME}")).text
+    for path in (f"/containers/{NAME}/cadangan/edit", f"/containers/{NAME}/cadangan/restore"):
+        assert (await client.get(path)).status_code == 200
+
+
+def standby_form(**over):
+    data = {"enabled": "1", "runner": "runner-1", "sfull_mode": "day", "sfull_time": "03:00",
+            "sbinlog_mode": "mins", "sbinlog_every": "30"}
+    data.update(over)
+    return data
+
+
+async def test_standby_settings_saved_and_shown(client, world):
+    resp = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(), headers=post_headers(world))
+    assert resp.status_code == 200
+    async with async_session_factory() as db:
+        row = await db.get(ContainerSettings, NAME)
+    assert (row.standby_enabled, row.standby_runner, row.standby_full_schedule, row.standby_binlog_schedule) == (
+        True, "runner-1", "0 3 * * *", "*/30 * * * *")
+    dialog = (await client.get(f"/containers/{NAME}/cadangan/edit")).text
+    assert 'value="runner-1" selected' in dialog and 'value="03:00"' in dialog and '<option value="30" selected>' in dialog
+    page = (await client.get(f"/containers/{NAME}/cadangan")).text
+    assert "Tiap hari 03:00" in page and "Tiap 30 menit" in page and "belum dinyalakan" not in page
+
+
+async def test_standby_settings_validation(client, world):
+    headers = post_headers(world)
+    no_runner = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(runner=""), headers=headers)
+    assert no_runner.status_code == 422 and "Pilih runner cadangan" in no_runner.text
+    assert no_runner.headers["hx-retarget"] == "#standby-settings-form"
+    bad = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(sbinlog_mode="custom", sbinlog_cron="x"),
+                           headers=headers)
+    assert bad.status_code == 422 and "cron 5 kolom" in bad.text
+    ghost = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(runner="hantu"), headers=headers)
+    assert ghost.status_code == 422
+    async with async_session_factory() as db:
+        assert await db.get(ContainerSettings, NAME) is None
+
+
+async def test_standby_refuses_runner_on_same_server(client, world):
+    async with async_session_factory() as db, db.begin():
+        from app.containers.models import Heartbeat
+        machine = (await db.get(Heartbeat, NAME)).machine_id
+        db.add(RunnerHeartbeat(runner="runner-1", machine_id=machine))
+    headers = post_headers(world)
+    saved = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(), headers=headers)
+    assert saved.status_code == 422 and "satu server" in saved.text
+    now = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "runner-1"}, headers=headers)
+    assert now.status_code == 409
+
+
+async def test_restore_now_creates_manual_job_and_runner_switch_on_success(client, world):
+    runners.add("runner-2")
+    headers = post_headers(world)
+    await client.put(f"/containers/{NAME}/cadangan", data=standby_form(), headers=headers)
+    resp = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "runner-2"}, headers=headers)
+    assert resp.status_code == 200
+    again = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "runner-2"}, headers=headers)
+    assert again.status_code == 409          # satu restore pada satu waktu
+    async with async_session_factory() as db:
+        job = (await db.scalars(select(Job).where(Job.kind == "standby_full"))).one()
+    assert (job.runner, job.requested_by, job.status) == ("runner-2", "alice", "Menunggu")
+    unknown = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "hantu"}, headers=headers)
+    assert unknown.status_code == 422

@@ -16,6 +16,7 @@ from app.runners.schemas import JobResultIn, RunnerHeartbeatIn
 STATUS_WAITING = "Menunggu"
 STATUS_RUNNING = "Berjalan"
 STATUS_NOT_RUN = "Tidak terlaksana"
+UNFINISHED = (STATUS_WAITING, STATUS_RUNNING)
 USERS_DATABASE = "_users"
 
 
@@ -84,7 +85,11 @@ async def claim_next(db: AsyncSession, runner: str) -> dict | None:
         files = list(await db.scalars(
             select(Backup).join(JobFile, JobFile.backup_id == Backup.id).where(JobFile.job_id == job.id)
             .order_by(Backup.id)))
-        return {"id": job.id, "kind": job.kind, "container": job.container, "files": [file_row(f) for f in files]}
+        reply = {"id": job.id, "kind": job.kind, "container": job.container, "files": [file_row(f) for f in files]}
+        from app.runners import standby      # standby memakai modul ini juga
+        if (context := await standby.claim_context(db, job)) is not None:
+            reply["standby"] = context
+        return reply
 
 
 async def _own_running_job(db: AsyncSession, runner: str, job_id: int) -> Job:
@@ -112,6 +117,8 @@ async def finish_job(db: AsyncSession, runner: str, job_id: int, data: JobResult
             if item.backup_id is not None and item.backup_id not in allowed:
                 raise RunnerError(403, "File bukan bagian dari tugas ini.")
             db.add(RestoreTest(job_id=job_id, container=job.container, runner=runner, **item.model_dump()))
+        from app.runners import standby
+        await standby.record_result(db, job, data, allowed)
         job.status = data.status
         job.note = data.note
         job.finished_at = func.now()
