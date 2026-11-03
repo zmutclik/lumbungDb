@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     DATA_DIR: str = "/data"              # mount NFS
     MOUNT_MARKER: str = ".lumbung-mounted"   # kosong = cek penanda dimatikan
     MOUNT_PROBE_TIMEOUT_SECONDS: int = 10
+    NAS_SCAN_STALL_SECONDS: int = 300        # pindai ulang berhenti bila satu file tak selesai dibaca selama ini
     UPLOAD_MAX_CONCURRENT: int = 4       # total semua proses web; dibagi rata per proses
     WEB_CONCURRENCY: int = 2
     NAS_STATUS_STALE_SECONDS: int = 300  # status lebih tua dari ini = pengecek berhenti; upload ditolak
@@ -56,6 +57,8 @@ class Settings(BaseSettings):
     TELEGRAM_API_BASE: str = "https://api.telegram.org"
     TELEGRAM_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    NOTIFY_MAX_AGE_HOURS: int = Field(default=24, ge=1)     # pesan yang tak juga terkirim sesudah ini dibuang
+    NOTIFY_STUCK_MINUTES: int = Field(default=30, ge=1)     # tertahan selama ini = alert di dashboard
     ALERT_DISK_FREE_PERCENT: int = 10
     ALERT_HEARTBEAT_MINUTES: int = 10
     ALERT_FULL_HOURS: int = 36

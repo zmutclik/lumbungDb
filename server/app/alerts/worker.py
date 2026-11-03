@@ -17,11 +17,13 @@ from app.core.config import settings
 from app.core.database import make_engine
 from app.core.discovery import import_domain_modules
 from app.core.logging import setup_logging
+from app.nas import scan as nas_scan
 from app.nas import service as nas_service
 from app.nas.monitor import NasMonitor
 from app.agents.dependencies import registry
 from app.reports import ingest as metrics_ingest
 from app.reports import service as report_service
+from app.notifications import service as notification_service
 from app.retention import service as retention_service
 from app.runners import scheduling as runner_scheduling
 from app.runners import service as runner_service
@@ -33,6 +35,7 @@ PURGE_EVERY = 60     # putaran; sekitar tiap jam
 
 async def tick(factory: async_sessionmaker, monitor: NasMonitor, client: httpx.AsyncClient) -> None:
     result = await monitor.check()
+    await nas_scan.kick(factory)
     async with factory() as db:
         await nas_service.save_result(db, result)
         await container_service.sync_with_file(db)
@@ -54,6 +57,7 @@ async def main() -> None:
     factory = async_sessionmaker(engine, autoflush=False, expire_on_commit=False)
     monitor = NasMonitor()
     deleter = retention_service.Deleter()
+    await nas_scan.reset_interrupted(factory)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -71,6 +75,8 @@ async def main() -> None:
                             await metrics_ingest.purge(db, cutoff)
                         async with factory() as db:
                             await retention_service.run_retention(db, deleter)
+                        async with factory() as db:
+                            await notification_service.purge(db)
                 except Exception:      # database sesaat tidak terjangkau tidak boleh menghentikan pengecek
                     logger.exception("check_failed")
                 rounds += 1

@@ -17,6 +17,9 @@ from app.core.templating import render, templates
 from app.dashboard import service as view
 from app.dashboard.schemas import BackupRequestForm, ContainerForm
 from app.installs import service as install_service
+from app.nas import scan as nas_scan
+from app.nas import service as nas_service
+from app.notifications import service as notification_service
 from app.runner_admin import service as runner_view
 from app.runners import service as runner_service
 from app.runners import standby as standby_service
@@ -85,6 +88,7 @@ async def dashboard(request: Request, user: CurrentUserDep, db: DbSession, hari:
 @router.get("/alerts")
 async def alerts_page(request: Request, user: CurrentUserDep, db: DbSession):
     base = await _base(db, user, "alerts")
+    base["notifications"] = await notification_service.recent(db, 10)
     return render(request, "dashboard/alerts.html", "dashboard/_alerts.html", base)
 
 
@@ -92,7 +96,21 @@ async def alerts_page(request: Request, user: CurrentUserDep, db: DbSession):
 async def settings_page(request: Request, user: CurrentUserDep, db: DbSession):
     base = await _base(db, user, "settings")
     return render(request, "dashboard/settings.html", "dashboard/_settings.html",
-                  {**base, "rows": view.settings_rows(), "probe_timeout": settings.MOUNT_PROBE_TIMEOUT_SECONDS})
+                  {**base, "rows": view.settings_rows(), "probe_timeout": settings.MOUNT_PROBE_TIMEOUT_SECONDS,
+                   "scans": await nas_scan.recent_scans(db)})
+
+
+@router.post("/settings/rescan")
+async def rescan_nas(user: CurrentUserDep, db: DbSession):
+    """Membangun lagi metadata dari file di NAS. Tidak mengubah file; berjalan di worker."""
+    async with db.begin():
+        nas = await nas_service.get_view(db)
+    if nas.problem:
+        raise HTTPException(status_code=409, detail="NAS bermasalah; pindai ulang menunggu sampai NAS pulih.")
+    scan = await nas_scan.request_scan(db, user.username)
+    if scan is None:
+        raise HTTPException(status_code=409, detail="Masih ada pindaian yang menunggu atau berjalan.")
+    return _done("Pindai ulang diminta; worker akan memulainya sebentar lagi.", modal=False)
 
 
 @router.get("/api/status")

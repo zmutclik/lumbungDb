@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,7 @@ from app.agents.dependencies import registry
 from app.backups.models import Backup
 from app.containers.models import Container, Heartbeat
 from app.core.config import settings
-from app.integrations import telegram
+from app.notifications import service as notifications
 from app.reports import ingest, rules
 from app.reports.models import Metric, Report
 
@@ -181,9 +181,7 @@ async def publish_due(db: AsyncSession, client: httpx.AsyncClient) -> list[int]:
         except IntegrityError:      # instance lain menerbitkannya lebih dulu
             continue
         published.append(report.id)
-        sent = await telegram.send_message(client, settings.TELEGRAM_TOKEN, settings.TELEGRAM_CHAT_ID,
-                                           summary_text(report), api_base=settings.TELEGRAM_API_BASE)
-        if sent:
-            async with db.begin():
-                await db.execute(update(Report).where(Report.id == report.id).values(sent_at=func.now()))
+        async with db.begin():
+            notifications.enqueue(db, summary_text(report), kind="laporan", ref=f"report:{report.id}")
+        await notifications.deliver_due(db, client)
     return published
