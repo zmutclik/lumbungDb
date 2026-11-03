@@ -1,0 +1,39 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+<div {{ ui.live(request) }}>
+{% include "dashboard/_container_head.html" %}
+{% set can_write = view.status != "off" %}
+{% set cfg = settings_row %}
+{% if cfg is none or not cfg.test_runner %}<div class="banner banner-warn"><b>Belum ada runner uji.</b> Backup container ini belum terbukti bisa dipulihkan. Pilih runner di bawah.</div>
+{% elif cfg.test_schedule in (none, "off") %}<div class="banner banner-warn"><b>Jadwal uji mati.</b> Uji hanya berjalan bila dijalankan manual. Uji yang hanya mencakup dump bukan bukti untuk full.</div>{% endif %}
+{% if banner_same_server %}<div class="banner banner-bad"><b>Runner uji satu server dengan container ini.</b> Uji ditolak sampai container memakai runner di server lain.</div>{% endif %}
+<div class="card card-pad">
+  <div class="page-head"><div><h2>Pengaturan uji restore</h2></div>
+  {% if can_write %}<div class="actions"><button class="btn" hx-get="/containers/{{ view.name }}/uji-restore/edit" hx-target="#modal" hx-swap="innerHTML">Ubah</button>
+  <button class="btn btn-pri" hx-post="/containers/{{ view.name }}/uji-restore/run"{% if not cfg or not cfg.test_runner %} disabled{% endif %}>Uji sekarang</button></div>{% endif %}</div>
+  <dl class="kv">
+    <dt>Runner uji</dt><dd>{% if cfg and cfg.test_runner %}<a href="/runners">{{ cfg.test_runner }}</a>{% else %}—{% endif %}</dd>
+    <dt>Jadwal</dt><dd>{{ schedule_label }}{% if next_run %} · berikutnya {{ next_run | tanggal }}{% endif %}</dd>
+    <dt>Cakupan</dt><dd>{% if cfg and not cfg.test_full %}tanpa full{% else %}full{% endif %}, {% if cfg and cfg.test_databases %}dump {{ cfg.test_databases | join(", ") }}{% else %}semua dump{% endif %}, <code>_users</code> dan rantai binlog selalu
+      {% if untested %}<br><span class="msg-warn">Tidak diuji: {{ untested | join(", ") }}</span>{% endif %}</dd>
+    <dt>Uji terakhir</dt><dd>{% if last_job %}{{ last_job.status }} · {{ last_job.finished_at | tanggal }}{% else %}belum ada{% endif %}{% if last_pass %} · terakhir lolos {{ last_pass | tanggal }}{% endif %}</dd>
+  </dl>
+</div>
+<h2 class="section">Riwayat uji</h2>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Tugas</th><th>Status</th><th>Hasil per jenis</th><th>Dibuat</th><th>Lama</th></tr></thead><tbody>
+{% for job in jobs %}
+<tr>
+  <td>#{{ job.id }}<br><span class="muted small">{{ job.runner }}{% if job.requested_by %} · oleh {{ job.requested_by }}{% else %} · terjadwal{% endif %}</span></td>
+  <td><span class="pill pill-{{ 'ok' if job.status == 'Lolos' else 'bad' if job.status == 'Gagal' else 'warn' if job.status == 'Tidak terlaksana' else 'wait' }}">{{ job.status }}</span>{% if job.status == "Berjalan" and job.step %}<br><span class="muted small">{{ job.step }}</span>{% endif %}</td>
+  <td>{% for r in results.get(job.id, []) %}
+    <div class="small"><b>{{ kind_label.get(r.kind, r.kind) }}{% if r.kind == "dump" %} {{ r.database }}{% endif %}</b>: {{ r.status }}{% if r.duration_seconds is not none %} ({{ r.duration_seconds }} dtk){% endif %}{% if r.failed_step %} · langkah: {{ r.failed_step }}{% endif %}
+    {% if r.log and r.status != "Lolos" %}<details><summary class="muted">log</summary><pre class="small">{{ r.log }}</pre></details>{% endif %}</div>
+    {% else %}{% if job.note %}<span class="small">{{ job.note }}</span>{% else %}—{% endif %}{% endfor %}</td>
+  <td>{{ job.created_at | tanggal }}</td>
+  <td>{{ durasi(job.claimed_at, job.finished_at) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="5"><div class="empty"><b>Belum ada uji</b>Pilih runner, lalu tekan Uji sekarang atau tunggu jadwal.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+</div>

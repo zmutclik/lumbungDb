@@ -16,6 +16,11 @@ from app.core.templating import render, templates
 from app.dashboard import service as view
 from app.dashboard.schemas import BackupRequestForm, ContainerForm
 from app.installs import service as install_service
+from app.runner_admin import service as runner_view
+from app.runners import service as runner_service
+from app.runners.dependencies import registry as runner_registry
+from app.runners.models import RunnerHeartbeat
+from app.backup_control import cron as cron_lib
 from app.agents.agents_file import AgentsFileWriteError, NameRejected, project_name
 from app.agents.dependencies import registry
 
@@ -310,6 +315,99 @@ async def schedule_update(name: str, request: Request, user: CurrentUserDep, db:
     except control.ControlError as err:
         raise _control_error(err) from err
     return _done(f"Jadwal disimpan, menunggu agen {name}." if changed else "Tidak ada perubahan jadwal.")
+
+
+# ---------- uji restore ----------
+@router.get("/containers/{name}/uji-restore")
+async def container_tests(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    context = await _detail_context(db, user, name, "uji")
+    cfg = await runner_view.container_settings(db, name)
+    expr = cfg.test_schedule if cfg else None
+    jobs = await runner_view.recent_jobs(db, container=name, limit=10)
+    last_job, last_pass = await runner_view.last_outcome(db, name)
+    known = await runner_view.known_databases(db, name)
+    untested = []
+    if cfg and not cfg.test_full:
+        untested.append("full")
+    if cfg and cfg.test_databases:
+        untested += [d for d in known if d not in cfg.test_databases]
+    beat = await db.get(RunnerHeartbeat, cfg.test_runner) if cfg and cfg.test_runner else None
+    machine = context["view"].state.machine_id
+    next_run = None
+    if expr and expr != "off":
+        local_now = datetime.now(view.DISPLAY_TZ).replace(tzinfo=None)
+        due = cron_lib.next_run(expr, local_now)
+        next_run = due.replace(tzinfo=view.DISPLAY_TZ).astimezone(UTC).replace(tzinfo=None) if due else None
+    context.update(
+        settings_row=cfg, schedule_label=cron_lib.label(expr) if expr else "—", next_run=next_run, jobs=jobs,
+        results=await runner_view.results_by_job(db, [j.id for j in jobs]), last_job=last_job, last_pass=last_pass,
+        untested=untested, kind_label=runner_view.KIND_LABEL,
+        banner_same_server=bool(beat and beat.machine_id and machine and beat.machine_id == machine),
+    )
+    return render(request, "dashboard/container.html", "runners/_container_tests.html", context)
+
+
+async def _test_form(request, db, name, form, *, status_code=200, error=None, headers=None):
+    cfg = await runner_view.container_settings(db, name)
+    if form is None:
+        values = {**runner_view.schedule_form(cfg.test_schedule if cfg else None),
+                  "runner": cfg.test_runner if cfg else "", "full": cfg.test_full if cfg else True,
+                  "databases": list(cfg.test_databases or []) if cfg else []}
+    else:
+        expr = view.cron_from_form("test", form)
+        values = {**runner_view.schedule_form(expr), "mode": str(form.get("test_mode", "day")),
+                  "time": str(form.get("test_time", "03:30")), "dow": str(form.get("test_dow", "0")),
+                  "cron": str(form.get("test_cron", "")), "runner": str(form.get("runner", "")),
+                  "full": form.get("full") == "1", "databases": form.getlist("db")}
+    return templates.TemplateResponse(
+        request=request, name="runners/_test_settings.html", status_code=status_code, headers=headers or {},
+        context={"name": name, "values": values, "error": error, "day_names": view.DAY_NAMES,
+                 "runner_names": sorted(runner_registry.entries().active),
+                 "databases": await runner_view.known_databases(db, name)},
+    )
+
+
+@router.get("/containers/{name}/uji-restore/edit")
+async def test_settings_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _test_form(request, db, name, None)
+
+
+@router.post("/containers/{name}/uji-restore/preview")
+async def test_settings_preview(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _test_form(request, db, name, await request.form())
+
+
+@router.put("/containers/{name}/uji-restore")
+async def test_settings_save(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    form = await request.form()
+    try:
+        await runner_view.save_settings(
+            db, name, runner=str(form.get("runner", "")), schedule=view.cron_from_form("test", form),
+            full=form.get("full") == "1", databases=form.getlist("db"))
+    except runner_view.SettingsError as err:
+        if err.status_code == 422:
+            return await _test_form(request, db, name, form, status_code=422, error=err.detail,
+                                    headers={"HX-Retarget": "#test-settings-form", "HX-Reswap": "outerHTML"})
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done("Pengaturan uji restore disimpan.")
+
+
+@router.post("/containers/{name}/uji-restore/run")
+async def test_run_now(name: str, user: CurrentUserDep, db: DbSession):
+    async with db.begin():      # dibaca lebih dulu; create_restore_test membuka transaksinya sendiri
+        cfg = await runner_view.container_settings(db, name)
+        chosen = (cfg.test_runner, cfg.test_full, cfg.test_databases) if cfg else None
+    if chosen is None or not chosen[0]:
+        raise HTTPException(status_code=409, detail="Pilih runner uji lebih dulu.")
+    runner, full, databases = chosen
+    if runner not in runner_registry.entries().active:
+        raise HTTPException(status_code=409, detail="Runner uji nonaktif.")
+    try:
+        await runner_service.create_restore_test(
+            db, name, runner, full=full, databases=databases, requested_by=user.username)
+    except runner_service.RunnerError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done(f"Uji restore diminta, menunggu runner {runner}.", modal=False)
 
 
 # ---------- permintaan backup ----------

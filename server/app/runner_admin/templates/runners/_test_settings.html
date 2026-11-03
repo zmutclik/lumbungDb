@@ -1,0 +1,22 @@
+<form id="test-settings-form" hx-put="/containers/{{ name }}/uji-restore">
+  <h3>Uji restore {{ name }}</h3>
+  <div class="field"><label for="ts-runner">Runner uji</label>
+    <select id="ts-runner" name="runner"><option value="">— belum dipilih —</option>
+      {% for r in runner_names %}<option value="{{ r }}"{% if r == values.runner %} selected{% endif %}>{{ r }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="ts-mode">Jadwal</label><div class="bs-row">
+    <select id="ts-mode" name="test_mode" hx-post="/containers/{{ name }}/uji-restore/preview" hx-trigger="change" hx-include="closest form" hx-target="#test-settings-form" hx-swap="outerHTML">
+      {% for value, title in (("day", "Tiap hari"), ("week", "Mingguan"), ("custom", "Kustom (cron)"), ("off", "Mati")) %}<option value="{{ value }}"{% if values.mode == value %} selected{% endif %}>{{ title }}</option>{% endfor %}
+    </select>
+    {% if values.mode == "week" %}<select name="test_dow" aria-label="Hari">{% for day in day_names %}<option value="{{ loop.index0 }}"{% if values.dow == loop.index0 | string %} selected{% endif %}>Tiap {{ day }}</option>{% endfor %}</select>{% endif %}
+    {% if values.mode in ("day", "week") %}<input type="time" name="test_time" value="{{ values.time }}" aria-label="Jam (WIB)">{% endif %}
+    {% if values.mode == "custom" %}<input type="text" name="test_cron" value="{{ values.cron }}" maxlength="120" placeholder="mis. 30 3 * * 0" aria-label="Cron" autocomplete="off" spellcheck="false">{% endif %}
+  </div>
+  {% if error %}<div class="msg-err">✕ {{ error }}</div>{% endif %}</div>
+  <div class="field"><label><input type="checkbox" name="full" value="1"{% if values.full %} checked{% endif %}> Uji full</label>
+    <div class="hint">Mengekstrak full terbaru, menjalankan <code>--prepare</code>, dan membuka MariaDB. Butuh ruang scratch beberapa kali ukuran full.</div></div>
+  <div class="field"><label>Dump yang diuji</label>
+    {% for d in databases %}<label class="small"><input type="checkbox" name="db" value="{{ d }}"{% if d in values.databases %} checked{% endif %}> {{ d }}</label><br>{% else %}<span class="muted small">Belum ada dump.</span>{% endfor %}
+    <div class="hint">Tidak ada yang dicentang berarti semua. <code>_users</code> dan rantai binlog selalu diperiksa.</div></div>
+  <p class="hint">Waktu memakai WIB. Runner baru berlaku mulai uji berikutnya.</p>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Simpan</button></div>
+</form>
