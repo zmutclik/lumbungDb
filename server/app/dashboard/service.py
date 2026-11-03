@@ -374,6 +374,10 @@ def settings_rows() -> list[tuple[str, str]]:
         ("ALERT_USERS_HOURS", f"{settings.ALERT_USERS_HOURS} jam, bila agen belum melaporkan jadwal"),
         ("ALERT_DB_EXPECTED_DAYS", f"{settings.ALERT_DB_EXPECTED_DAYS} hari"),
         ("ALERT_DISK_FREE_PERCENT", f"{settings.ALERT_DISK_FREE_PERCENT}%"),
+        ("RETENTION_ENABLED", "ya" if settings.RETENTION_ENABLED else "mati: tidak ada file yang dihapus"),
+        ("RETENTION_DAILY_DAYS", f"{settings.RETENTION_DAILY_DAYS} hari: semua full dan dump disimpan"),
+        ("RETENTION_MONTHS", f"{settings.RETENTION_MONTHS} bulan: sesudah itu satu per bulan"),
+        ("RETENTION_BINLOG_DAYS", f"{settings.RETENTION_BINLOG_DAYS} hari, kecuali rantai full yang lolos uji"),
         ("RENOTIFY_HOURS", f"{settings.RENOTIFY_HOURS} jam"),
         ("BACKUP_REQUEST_TTL_MINUTES", f"{settings.BACKUP_REQUEST_TTL_MINUTES} menit"),
     ]

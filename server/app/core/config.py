@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     RENOTIFY_HOURS: int = 12
     BACKUP_REQUEST_TTL_MINUTES: int = 15
 
+    # Retensi di NAS: harian 30 hari, bulanan 12 bulan, binlog 3 hari. Menghapus file; lihat app/retention/rules.py.
+    RETENTION_ENABLED: bool = True
+    RETENTION_DAILY_DAYS: int = Field(default=30, ge=1)
+    RETENTION_MONTHS: int = Field(default=12, ge=0)
+    RETENTION_BINLOG_DAYS: int = Field(default=3, ge=1)
+    RETENTION_BATCH: int = Field(default=200, ge=1)     # file per putaran, supaya satu putaran tetap singkat
+    RETENTION_TIMEOUT_SECONDS: int = 120
+
     # Kesehatan database dan laporan (tahap 3). Angka awal, belum diukur pada database sebenarnya.
     METRICS_RETENTION_DAYS: int = 90
     REPORT_HOUR: int = Field(default=7, ge=0, le=23)   # jam lokal (DISPLAY_TIMEZONE) laporan harian dan mingguan terbit

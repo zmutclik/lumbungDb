@@ -22,6 +22,7 @@ from app.nas.monitor import NasMonitor
 from app.agents.dependencies import registry
 from app.reports import ingest as metrics_ingest
 from app.reports import service as report_service
+from app.retention import service as retention_service
 from app.runners import scheduling as runner_scheduling
 from app.runners import service as runner_service
 from app.runners.dependencies import registry as runner_registry
@@ -51,6 +52,7 @@ async def main() -> None:
     engine = make_engine(pool_size=2, max_overflow=0, statement_timeout=30)
     factory = async_sessionmaker(engine, autoflush=False, expire_on_commit=False)
     monitor = NasMonitor()
+    deleter = retention_service.Deleter()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -66,6 +68,8 @@ async def main() -> None:
                         async with factory() as db:
                             cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=settings.METRICS_RETENTION_DAYS)
                             await metrics_ingest.purge(db, cutoff)
+                        async with factory() as db:
+                            await retention_service.run_retention(db, deleter)
                 except Exception:      # database sesaat tidak terjangkau tidak boleh menghentikan pengecek
                     logger.exception("check_failed")
                 rounds += 1
