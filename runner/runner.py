@@ -599,6 +599,16 @@ class StandbyRunner(Restorer):
         applied = self._apply_binlogs(self.name, password, self._binlog_entries())
         self.extra = {"standby": {"applied_binlog_no": applied}}
 
+    def remove(self):
+        """Menghapus database cadangan di mesin ini: container, datadir, password, dan catatan port."""
+        cur_dir, cur_pw = self._paths("current")
+        self.progress("hentikan dan hapus database cadangan")
+        self._stop(self.name)
+        purge_dir(cur_dir, self.config, self.run)
+        for name in (cur_pw, os.path.join(self.base, "state.json")):
+            if os.path.exists(name):
+                os.unlink(name)
+
     def execute(self):
         os.makedirs(self.base, exist_ok=True)
         started = time.time()
@@ -610,6 +620,8 @@ class StandbyRunner(Restorer):
                 raise NotRun("scratch", f"ruang scratch {free} byte, perlu sekitar {need}")
             if self.job["kind"] == "standby_full":
                 self.restore_full()
+            elif self.job["kind"] == "standby_remove":
+                self.remove()
             else:
                 self.apply_binlogs()
             status, note = "Lolos", None
@@ -699,7 +711,7 @@ class Runner:
             self.client.json("POST", f"/api/runner/jobs/{job['id']}/progress", {"step": step[:200]})
 
         try:
-            if job["kind"] in ("standby_full", "standby_apply"):
+            if job["kind"] in ("standby_full", "standby_apply", "standby_remove"):
                 worker = StandbyRunner(self.config, self.client, job, self.run, progress)
                 status, results = worker.execute()
                 note, extra = worker.note, worker.extra

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     RESTORE_TEST_DEFAULT: str = "30 3 * * 0"   # jadwal uji bawaan: tiap Minggu 03:30 (jam DISPLAY_TIMEZONE)
     STANDBY_FULL_DEFAULT: str = "0 3 * * *"      # pemulihan full database cadangan: tiap hari 03:00
     STANDBY_BINLOG_DEFAULT: str = "0 * * * *"    # penerapan binlog baru: tiap jam
+    STANDBY_LAG_HOURS: int = Field(default=3, ge=1)   # binlog yang sudah ada tapi belum diterapkan lebih lama dari ini = alert
     JOB_TIMEOUT_MINUTES: int = 60             # diperpanjang tiap laporan langkah
     DATA_DIR: str = "/data"              # mount NFS
     MOUNT_MARKER: str = ".lumbung-mounted"   # kosong = cek penanda dimatikan

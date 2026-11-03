@@ -22,6 +22,6 @@
     {{ schedule_row("sbinlog", "Penerapan binlog baru", values.binlog, (("mins", "Tiap N menit"), ("hours", "Tiap N jam"), ("custom", "Kustom (cron)"), ("off", "Mati"))) }}
   </div>
   {% if error %}<div class="msg-err">✕ {{ error }}</div>{% endif %}
-  <p class="hint">Waktu memakai WIB. Database cadangan berjalan read-only dengan event scheduler mati. Mematikan jadwal belum menghapus salinan yang sudah ada di mesin runner.</p>
+  <p class="hint">Waktu memakai WIB. Database cadangan berjalan read-only dengan event scheduler mati. Mematikan database cadangan menghapus salinannya dari mesin runner.</p>
   <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Simpan</button></div>
 </form>

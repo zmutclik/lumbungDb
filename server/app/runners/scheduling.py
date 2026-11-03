@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.dependencies import registry as agents
 from app.alerts.rules import AlertItem
 from app.backup_control import cron
+from app.backups.models import Backup
 from app.containers.models import Container, Heartbeat
 from app.core.config import settings
 from app.runners import service, standby
@@ -153,4 +154,62 @@ async def runner_alerts(db: AsyncSession) -> list[AlertItem]:
             items.append(AlertItem(f"restoreban:{row.container}", "Uji restore", "bad",
                                    f"Runner uji {row.test_runner} satu server dengan container", row.container,
                                    short="Runner satu server"))
+    items.extend(await _standby_alerts(db, now, beats, machines, active_agents))
+    return items
+
+
+async def _standby_alerts(db: AsyncSession, now: datetime, beats: dict, machines: dict, active_agents) -> list[AlertItem]:
+    """Database cadangan: terhenti, restore gagal, tertinggal, full terlambat, dan runner satu server."""
+    items: list[AlertItem] = []
+    configured = {r.container: r for r in await db.scalars(select(ContainerSettings).where(
+        ContainerSettings.standby_enabled.is_(True)))}
+    states = {r.container: r for r in await db.scalars(select(Standby))}
+    for container, cfg in configured.items():
+        if container not in active_agents:
+            continue
+        beat = beats.get(cfg.standby_runner or "")
+        if beat and beat.machine_id and beat.machine_id == machines.get(container):
+            items.append(AlertItem(f"standbyban:{container}", "Database cadangan", "bad",
+                                   f"Runner cadangan {cfg.standby_runner} satu server dengan container", container,
+                                   short="Runner cadangan satu server"))
+    finished = (service.STATUS_NOT_RUN, "Gagal", "Lolos")
+    latest = (select(Job.container, func.max(Job.id).label("id")).where(
+        Job.kind.in_(standby.KINDS), Job.status.in_(finished)).group_by(Job.container)).subquery()
+    for job in await db.scalars(select(Job).join(latest, Job.id == latest.c.id)):
+        if job.container not in active_agents:
+            continue
+        if job.status == "Gagal":
+            items.append(AlertItem(f"standbyrun:{job.container}", "Database cadangan", "bad",
+                                   "Restore database cadangan gagal", job.container, detail=job.note or "",
+                                   short="Restore cadangan gagal"))
+        elif job.status == service.STATUS_NOT_RUN:
+            items.append(AlertItem(f"standbyrun:{job.container}", "Database cadangan", "warn",
+                                   "Restore database cadangan tidak terlaksana", job.container, detail=job.note or "",
+                                   short="Restore cadangan tidak terlaksana"))
+    for container, state in states.items():
+        cfg = configured.get(container)
+        if cfg is None or container not in active_agents:
+            continue
+        if state.full_backup_id is not None and state.applied_binlog_no is None:
+            items.append(AlertItem(f"standby:{container}", "Database cadangan", "bad",
+                                   "Penerapan binlog database cadangan terhenti sampai pemulihan full berikutnya",
+                                   container, short="Database cadangan terhenti"))
+            continue
+        if state.chain_id is not None and state.applied_binlog_no is not None:
+            oldest = await db.scalar(select(func.min(Backup.backup_at)).where(
+                Backup.container == container, Backup.kind == "binlog", Backup.chain_id == state.chain_id,
+                Backup.binlog_no > state.applied_binlog_no))
+            if oldest is not None and (now - oldest).total_seconds() > settings.STANDBY_LAG_HOURS * 3600:
+                hours = int((now - oldest).total_seconds() // 3600)
+                items.append(AlertItem(f"standbylag:{container}", "Database cadangan", "warn",
+                                       f"Database cadangan tertinggal {hours} jam dari binlog yang sudah ada", container,
+                                       short="Database cadangan tertinggal"))
+        expr = cfg.standby_full_schedule or settings.STANDBY_FULL_DEFAULT
+        gap = cron.max_gap_hours(expr) if expr != "off" else None
+        limit = max(gap * 1.5, 36) if gap else None
+        if limit and state.restored_at and (now - state.restored_at).total_seconds() > limit * 3600:
+            hours = int((now - state.restored_at).total_seconds() // 3600)
+            items.append(AlertItem(f"standbyfull:{container}", "Database cadangan", "warn",
+                                   f"Pemulihan full database cadangan terakhir {hours} jam lalu", container,
+                                   short="Full cadangan terlambat"))
     return items

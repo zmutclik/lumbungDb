@@ -228,3 +228,145 @@ async def test_binlog_apply_follows_its_own_schedule(world):
         await db.execute(Job.__table__.update().values(created_at=datetime(2026, 11, 1)))
     assert len(await schedule()) == 1
     assert await standby_jobs() == ["standby_full", "standby_apply"]
+
+
+# ---------- alert ----------
+async def alert_keys():
+    async with async_session_factory() as db:
+        return {a.key: a for a in await scheduling.runner_alerts(db)}
+
+
+async def ready_standby(world, **cfg):
+    await enable(**cfg)
+    job = await full_job_without_actor()
+    await finish(job, full_backup_id=world["full"], applied_binlog_no=12, port=33100)
+
+
+async def full_job_without_actor():
+    async with async_session_factory() as db:
+        return await standby.create_full_job(db, NAME, "runner-1")
+
+
+async def test_healthy_standby_has_no_standby_alert(world):
+    await ready_standby(world)
+    assert not [k for k in await alert_keys() if k.startswith("standby")]
+
+
+async def test_broken_standby_alerts_until_next_full(world):
+    await ready_standby(world)
+    async with async_session_factory() as db:
+        await db.execute(Standby.__table__.update().values(applied_binlog_no=None))
+        await db.commit()
+    found = await alert_keys()
+    assert found[f"standby:{NAME}"].level == "bad" and "terhenti" in found[f"standby:{NAME}"].cond
+
+
+async def test_failed_restore_alerts_and_recovers_after_success(world):
+    await ready_standby(world)
+    bad = await full_job_without_actor()
+    await finish(bad, "Gagal")
+    assert f"standbyrun:{NAME}" in await alert_keys()
+    good = await full_job_without_actor()
+    await finish(good, full_backup_id=world["full"], applied_binlog_no=12, port=33100)
+    assert f"standbyrun:{NAME}" not in await alert_keys()
+
+
+async def test_not_run_is_only_a_warning(world):
+    await ready_standby(world)
+    job = await full_job_without_actor()
+    await finish(job, "Tidak terlaksana")
+    assert (await alert_keys())[f"standbyrun:{NAME}"].level == "warn"
+
+
+async def test_lag_when_old_binlogs_remain_unapplied(world):
+    await ready_standby(world)
+    assert f"standbylag:{NAME}" not in await alert_keys()
+    await add_backup("binlog", "b13", 40, no=13)      # tanggal tetap di fixture, jadi jauh sebelum jam DB sekarang
+    found = await alert_keys()
+    assert "tertinggal" in found[f"standbylag:{NAME}"].cond and "jam dari binlog" in found[f"standbylag:{NAME}"].cond
+    await add_backup("binlog", "b14", 0, no=14)       # binlog baru tidak menghapus alert yang sudah ada
+    assert f"standbylag:{NAME}" in await alert_keys()
+
+
+async def test_stale_full_and_disabled_standby(world):
+    await ready_standby(world)
+    async with async_session_factory() as db:
+        await db.execute(Standby.__table__.update().values(restored_at=datetime(2026, 1, 1)))
+        await db.commit()
+    assert f"standbyfull:{NAME}" in await alert_keys()
+    async with async_session_factory() as db, db.begin():
+        (await db.get(ContainerSettings, NAME)).standby_enabled = False
+    assert not [k for k in await alert_keys() if k.startswith("standby")]
+
+
+async def test_runner_on_same_server_alerts(world):
+    from app.containers.models import Heartbeat
+    from app.runners.models import RunnerHeartbeat
+    await enable()
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container=NAME, server="s", machine_id="c" * 32, info={}))
+        db.add(RunnerHeartbeat(runner="runner-1", machine_id="c" * 32))
+    assert f"standbyban:{NAME}" in await alert_keys()
+
+
+# ---------- penghapusan salinan ----------
+async def kinds_by_runner():
+    async with async_session_factory() as db:
+        return sorted((j.runner, j.kind, j.status) for j in await db.scalars(select(Job).where(Job.kind == standby.KIND_REMOVE)))
+
+
+async def finish_as(job, runner, body):
+    from app.runners.schemas import JobResultIn
+    async with async_session_factory() as db:
+        async with db.begin():
+            row = await db.get(Job, job.id)
+            row.status, row.runner = service.STATUS_RUNNING, runner
+        await service.finish_job(db, runner, job.id, JobResultIn.model_validate(body))
+
+
+async def test_moving_to_another_runner_removes_the_old_copy_only_after_success(world):
+    runners.add("runner-2")
+    await ready_standby(world)
+    async with async_session_factory() as db:
+        job = await standby.create_full_job(db, NAME, "runner-2", requested_by="alice")
+    assert await kinds_by_runner() == []                 # selama belum lolos, yang lama tetap
+    await finish_as(job, "runner-2", {"status": "Gagal"})
+    assert await kinds_by_runner() == [] and (await standby_row()).runner == "runner-1"
+    async with async_session_factory() as db:
+        job = await standby.create_full_job(db, NAME, "runner-2", requested_by="alice")
+    await finish_as(job, "runner-2", {"status": "Lolos", "standby": {
+        "full_backup_id": world["full"], "applied_binlog_no": 12, "port": 33101}})
+    assert await kinds_by_runner() == [("runner-1", "standby_remove", "Menunggu")]
+    assert (await standby_row()).runner == "runner-2"
+    async with async_session_factory() as db:
+        removal = (await db.scalars(select(Job).where(Job.kind == standby.KIND_REMOVE))).one()
+    await finish_as(removal, "runner-1", {"status": "Lolos"})
+    assert (await standby_row()).runner == "runner-2"      # baris milik runner baru tidak ikut terhapus
+    async with async_session_factory() as db:
+        run = (await db.scalars(select(StandbyRun).where(StandbyRun.kind == "hapus"))).one()
+    assert run.runner == "runner-1" and run.status == "Lolos"
+
+
+async def test_disabling_creates_a_removal_job_and_success_clears_the_state(world):
+    await ready_standby(world)
+    async with async_session_factory() as db:
+        from app.runner_admin import service as admin
+        await admin.save_standby_settings(db, NAME, enabled=False, runner="runner-1", full_schedule="0 3 * * *",
+                                          binlog_schedule="0 * * * *")
+    assert await kinds_by_runner() == [("runner-1", "standby_remove", "Menunggu")]
+    async with async_session_factory() as db:
+        from app.runner_admin import service as admin
+        await admin.save_standby_settings(db, NAME, enabled=False, runner="runner-1", full_schedule="0 3 * * *",
+                                          binlog_schedule="0 * * * *")
+    assert len(await kinds_by_runner()) == 1             # disimpan dua kali tidak membuat dua tugas
+    async with async_session_factory() as db:
+        job = (await db.scalars(select(Job).where(Job.kind == standby.KIND_REMOVE))).one()
+    await finish(job)
+    assert await standby_row() is None
+
+
+async def test_removal_job_does_not_block_a_new_restore(world):
+    await ready_standby(world)
+    async with async_session_factory() as db, db.begin():
+        db.add(standby.remove_job(NAME, "runner-1"))
+    assert (await full_job_without_actor()).kind == standby.KIND_FULL

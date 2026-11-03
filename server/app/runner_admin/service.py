@@ -12,7 +12,8 @@ from app.backups.models import Backup
 from app.core.config import settings
 from app.runners import service as runner_service
 from app.runners.dependencies import registry as runners
-from app.runners.models import ContainerSettings, Job, RestoreTest, RunnerHeartbeat
+from app.runners import standby as standby_service
+from app.runners.models import ContainerSettings, Job, RestoreTest, RunnerHeartbeat, Standby
 
 KIND_LABEL = {"full": "Full", "dump": "Dump", "users": "Akun (_users)", "binlog": "Rantai binlog"}
 
@@ -177,6 +178,13 @@ async def save_standby_settings(db: AsyncSession, container: str, *, enabled: bo
         if row is None:
             row = ContainerSettings(container=container, test_full=True)
             db.add(row)
+        existing = await db.get(Standby, container, with_for_update=True)
+        if not enabled and existing is not None and existing.runner:
+            active = await db.scalar(select(Job.id).where(
+                Job.container == container, Job.runner == existing.runner, Job.kind == standby_service.KIND_REMOVE,
+                Job.status.in_(runner_service.UNFINISHED)).limit(1))
+            if active is None:
+                db.add(standby_service.remove_job(container, existing.runner))     # mematikan menghapus salinannya
         row.standby_enabled = enabled
         row.standby_runner = runner or None
         row.standby_full_schedule = full_schedule

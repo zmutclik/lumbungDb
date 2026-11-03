@@ -151,10 +151,18 @@ else:
     pw_mode = oct(os.stat(os.path.join(scratch, "standby", CONTAINER, "current.pw")).st_mode & 0o777)
     if pw_mode != "0o600":
         problems.append(f"izin password {pw_mode}")
-leftover = sh(f"docker ps -aq --filter label=lumbung.runner=1").split()
+leftover = sh("docker ps -aq --filter label=lumbung.runner=1").split()
 if leftover:
     problems.append("container sementara tersisa")
+# Penghapusan lewat tugas standby_remove: container, datadir, password, dan catatan port hilang.
+status, _ = run_job("standby_remove", [])
+alive = sh(f"docker ps -aq --filter name={standby_name}").split()
+folder = os.path.join(scratch, "standby", CONTAINER)
+remaining = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+print("setelah hapus: container", alive, "| isi folder", remaining)
+if status != "Lolos" or alive or remaining:
+    problems.append(f"penghapusan tidak bersih: {status} {alive} {remaining}")
 print("MASALAH:", problems or "tidak ada")
 sh(f"docker rm -f -v {standby_name} >/dev/null 2>&1 || true")
-r.purge_dir(os.path.join(scratch, "standby", CONTAINER), config)
+r.purge_dir(folder, config)
 sys.exit(1 if problems else 0)

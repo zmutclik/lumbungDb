@@ -9,7 +9,9 @@ from app.runners.schemas import JobResultIn
 
 KIND_FULL = "standby_full"
 KIND_APPLY = "standby_apply"
+KIND_REMOVE = "standby_remove"
 KINDS = (KIND_FULL, KIND_APPLY)
+ALL_KINDS = (*KINDS, KIND_REMOVE)
 
 
 def binlog_start_number(name: str | None) -> int | None:
@@ -49,6 +51,11 @@ async def create_full_job(db: AsyncSession, container: str, runner: str, *, requ
     return job
 
 
+def remove_job(container: str, runner: str) -> Job:
+    """Menghapus database cadangan di satu runner. Tanpa file: runner hanya membersihkan mesinnya sendiri."""
+    return Job(runner=runner, container=container, kind=KIND_REMOVE, status=service.STATUS_WAITING)
+
+
 async def create_apply_job(db: AsyncSession, container: str, runner: str) -> Job | None:
     """None bila tidak ada binlog baru, atau database cadangan belum ada, atau rantainya berganti."""
     async with db.begin():
@@ -73,7 +80,7 @@ async def create_apply_job(db: AsyncSession, container: str, runner: str) -> Job
 
 async def claim_context(db: AsyncSession, job: Job) -> dict | None:
     """Keadaan database cadangan yang dibutuhkan runner untuk tugas penerapan."""
-    if job.kind not in KINDS:
+    if job.kind not in ALL_KINDS:
         return None
     standby = await db.get(Standby, job.container)
     return {"applied_binlog_no": standby.applied_binlog_no if standby else None,
@@ -82,11 +89,17 @@ async def claim_context(db: AsyncSession, job: Job) -> dict | None:
 
 async def record_result(db: AsyncSession, job: Job, data: JobResultIn, allowed: set[int]) -> None:
     """Dipanggil dari finish_job di dalam transaksinya. Hanya hasil Lolos mengubah keadaan database cadangan."""
-    if job.kind not in KINDS:
+    if job.kind not in ALL_KINDS:
         return
-    db.add(StandbyRun(container=job.container, job_id=job.id, runner=job.runner,
-                      kind="full" if job.kind == KIND_FULL else "binlog", manual=job.requested_by is not None,
-                      status=data.status, note=data.note))
+    kind_label = {KIND_FULL: "full", KIND_APPLY: "binlog", KIND_REMOVE: "hapus"}[job.kind]
+    db.add(StandbyRun(container=job.container, job_id=job.id, runner=job.runner, kind=kind_label,
+                      manual=job.requested_by is not None, status=data.status, note=data.note))
+    if job.kind == KIND_REMOVE:
+        if data.status == "Lolos":
+            row = await db.get(Standby, job.container, with_for_update=True)
+            if row is not None and row.runner == job.runner:
+                await db.delete(row)         # salinan di runner yang masih dipakai saja yang menghapus barisnya
+        return
     info = data.standby
     if job.kind == KIND_APPLY and data.status == "Gagal":
         # Sebagian binlog mungkin sudah masuk. Menerapkannya lagi memberi data ganda, jadi penerapan berhenti sampai
@@ -106,6 +119,9 @@ async def record_result(db: AsyncSession, job: Job, data: JobResultIn, allowed: 
         if info.full_backup_id is None or info.full_backup_id not in allowed:
             raise service.RunnerError(403, "Full bukan bagian dari tugas ini.")
         full = await db.get(Backup, info.full_backup_id)
+        if row.runner and row.runner != job.runner:
+            # Pindah runner: salinan lama dihapus hanya sesudah yang baru lolos.
+            db.add(remove_job(job.container, row.runner))
         row.full_backup_id, row.chain_id, row.runner = full.id, full.chain_id, job.runner
         row.restored_at = func.now()
         row.data_until = full.backup_at
