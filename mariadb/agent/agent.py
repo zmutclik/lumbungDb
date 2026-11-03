@@ -11,6 +11,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import ssl
 import subprocess
 import sys
@@ -21,10 +22,14 @@ import urllib.parse
 
 sys.path.insert(0, "/opt/lumbung")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import metrics as metrics_lib  # noqa: E402
 import schedule as schedule_lib  # noqa: E402
 
 HELPER = ["sudo", "-n", "/usr/local/sbin/lumbung-helper"]
 EXIT_ALREADY_RUNNING = 75
+DB_SOCKET = "/run/mysqld/mysqld.sock"
+AGE_RECIPIENT = re.compile(r"age1[0-9a-z]{58}")
+ENCRYPT_TIMEOUT_SECONDS = 6 * 3600
 CHUNK = 1024 * 1024
 REQUEST_UPLOAD_LIMIT_SECONDS = 30 * 60
 DATABASE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -56,6 +61,33 @@ def sha256_file(path):
         while chunk := handle.read(CHUNK):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def parse_recipients(value):
+    """Kunci publik age, dipisah koma. Satu nilai yang salah membatalkan semuanya: lebih baik tidak mengirim."""
+    recipients = [item.strip() for item in (value or "").split(",") if item.strip()]
+    return recipients if recipients and all(AGE_RECIPIENT.fullmatch(item) for item in recipients) else []
+
+
+def encrypt_file(source, target, recipients):
+    """Agen hanya memegang kunci publik, jadi file hasilnya tidak bisa dibuka lagi di container ini."""
+    args = ["age", "--encrypt"]
+    for recipient in recipients:
+        args += ["--recipient", recipient]
+    with open(source, "rb") as reader, open(target, "wb") as writer:
+        subprocess.run(args, stdin=reader, stdout=writer, stderr=subprocess.DEVNULL, check=True,
+                       timeout=ENCRYPT_TIMEOUT_SECONDS)
+
+
+def db_accepts_connections(path=DB_SOCKET):
+    """Hanya membuka socket, tanpa login: agen tidak memegang password database."""
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.settimeout(2)
+        try:
+            sock.connect(path)
+        except OSError:
+            return False
+    return True
 
 
 class Client:
@@ -95,14 +127,15 @@ class Client:
         finally:
             conn.close()
 
-    def upload(self, kind, relpath, path, sha256, stat, request_id=None, binlog_start=None):
+    def upload(self, kind, relpath, path, sha256, plain_sha256, mtime, request_id=None, binlog_start=None):
         conn = self._connection()
         try:
             headers = {
                 "X-Token": self.token,
                 "X-SHA256": sha256,
-                "X-File-Mtime": str(int(stat.st_mtime)),
-                "Content-Length": str(stat.st_size),
+                "X-Plain-SHA256": plain_sha256,
+                "X-File-Mtime": str(int(mtime)),
+                "Content-Length": str(os.stat(path).st_size),
                 "Content-Type": "application/octet-stream",
             }
             if request_id is not None:
@@ -131,6 +164,7 @@ class Agent:
         self.state_dir = os.path.join(self.backup_dir, ".lumbung", "agent")
         self.sent_file = os.path.join(self.state_dir, "sent.json")
         self.request_file = os.path.join(self.state_dir, "requests.json")
+        self.spool_dir = os.path.join(self.state_dir, "spool")
         self.lock = threading.RLock()
         self.sent = self._read_json(self.sent_file, {})
         self.seen = {}
@@ -142,7 +176,17 @@ class Agent:
         self.upload_failures = {}
         self.last_upload_ok = None
         self.mariadb_version = self._mariadb_version()
+        self.collector = metrics_lib.Collector(time.time)
         self.stop = threading.Event()
+        self._clear_spool()
+
+    def _clear_spool(self):
+        """Sisa salinan terenkripsi dari agen yang mati di tengah kiriman."""
+        for path in glob.glob(os.path.join(glob.escape(self.spool_dir), "*")):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     # ---------- berkas status ----------
     @staticmethod
@@ -240,13 +284,24 @@ class Agent:
                 return None
             self.in_flight.add(key)
         code = None
+        spool = None
         try:
-            digest = sha256_file(item["path"])
+            recipients = self.config["recipients"]
+            if not recipients:
+                self._note_failure(key, "LUMBUNG_AGE_RECIPIENTS kosong atau tidak valid; file tidak dikirim", None)
+                return None
+            plain_digest = sha256_file(item["path"])
             stat = os.stat(item["path"])
             if (stat.st_size, int(stat.st_mtime)) != (item["stat"].st_size, int(item["stat"].st_mtime)):
                 return None  # masih berubah saat dibaca; dicoba lagi di putaran berikutnya
+            os.makedirs(self.spool_dir, mode=0o700, exist_ok=True)
+            fd, spool = tempfile.mkstemp(dir=self.spool_dir)
+            os.close(fd)
+            encrypt_file(item["path"], spool, recipients)
+            # Hasil enkripsi selalu berbeda, jadi kiriman ulang dikenali dari X-Plain-SHA256.
             code, _result = self.client.upload(
-                item["kind"], item["relpath"], item["path"], digest, stat, request_id, self.binlog_start_for(item)
+                item["kind"], item["relpath"] + ".age", spool, sha256_file(spool), plain_digest, stat.st_mtime,
+                request_id, self.binlog_start_for(item),
             )
             if code == 200:
                 self.mark_sent(item)
@@ -256,10 +311,15 @@ class Agent:
                 return code
             self._note_failure(key, f"HTTP {code}", code)
             return code
-        except (OSError, http.client.HTTPException) as exc:
+        except (OSError, subprocess.SubprocessError, http.client.HTTPException) as exc:
             self._note_failure(key, type(exc).__name__, None)
             return None
         finally:
+            if spool:
+                try:
+                    os.unlink(spool)
+                except OSError:
+                    pass
             with self.lock:
                 self.in_flight.discard(key)
 
@@ -398,6 +458,7 @@ class Agent:
             "last_upload_ok": last_ok,
             "upload_error": upload_error,
             "schedule": self._effective_schedule(),
+            "metrics": self.collector.payload(),
         }
 
     def flush_outbox(self):
@@ -528,6 +589,11 @@ class Agent:
             if returncode == EXIT_ALREADY_RUNNING:
                 self.report_status(request_id, "Sudah berjalan", "Backup jenis ini sedang berjalan dari cron")
                 return
+            # Saat container di-restart, MariaDB berhenti lebih dulu dan script ikut gagal, sementara agen masih hidup
+            # beberapa detik. Itu bukan backup yang gagal. File yang sudah jadi dikirim oleh pemindaian biasa.
+            if returncode != 0 and not db_accepts_connections():
+                self.report_status(request_id, "Tidak selesai", "MariaDB berhenti saat backup berjalan; tidak diulang", output)
+                return
             produced = [
                 item
                 for item in self.scan()
@@ -613,6 +679,7 @@ def load_config():
         "max_file_age_days": max(0, int_env("MAX_FILE_AGE_DAYS", 0)),
         "request_upload_limit": REQUEST_UPLOAD_LIMIT_SECONDS,
         "agent_version": agent_version,
+        "recipients": parse_recipients(os.environ.get("LUMBUNG_AGE_RECIPIENTS")),
     }
 
 
@@ -626,8 +693,11 @@ def main():
         return 2
     agent = Agent(load_config(), Client(url, token))
     if args.drain:
+        agent.spool_dir = tempfile.mkdtemp(prefix="lumbung-spool-")  # /backup dipasang read-only saat drain
         return agent.drain()
     log(f"mulai, versi {agent.config['agent_version']}")
+    if not agent.config["recipients"]:
+        log("LUMBUNG_AGE_RECIPIENTS kosong atau tidak valid: backup tidak dikirim sampai diperbaiki")
     agent.run()
     return 0
 

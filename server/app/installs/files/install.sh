@@ -13,6 +13,7 @@ umask 077
 die() { printf 'GAGAL: %s\n' "$*" >&2; exit 1; }
 step() { printf '==> %s\n' "$*"; }
 random_text() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32; }
+random_user() { printf '%s_' "$1"; LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 12; }
 env_value() { sed -n "s/^$1=//p" "$2" | head -n 1; }
 
 port_busy() {
@@ -74,7 +75,10 @@ write_env() {
         step "Memakai .env yang sudah ada di $DIR; password tidak berubah"
         token_line=$(grep '^LUMBUNG_TOKEN=' "$WORK/session")
         url_line=$(grep '^LUMBUNG_URL=' "$WORK/session")
-        sed -e "s|^LUMBUNG_TOKEN=.*|$token_line|" -e "s|^LUMBUNG_URL=.*|$url_line|" "$DIR/.env" > "$DIR/.env.tmp"
+        recipients_line=$(grep '^LUMBUNG_AGE_RECIPIENTS=' "$WORK/session")
+        sed -e "s|^LUMBUNG_TOKEN=.*|$token_line|" -e "s|^LUMBUNG_URL=.*|$url_line|" \
+            -e "s|^LUMBUNG_AGE_RECIPIENTS=.*|$recipients_line|" "$DIR/.env" > "$DIR/.env.tmp"
+        grep -q '^LUMBUNG_AGE_RECIPIENTS=' "$DIR/.env.tmp" || printf '%s\n' "$recipients_line" >> "$DIR/.env.tmp"
         mv "$DIR/.env.tmp" "$DIR/.env"
         return
     fi
@@ -84,10 +88,12 @@ write_env() {
     if port_busy "$port"; then
         die "Port $port sudah dipakai. Jalankan ulang dengan port lain: ... | DATA_PORT=3307 LUMBUNG_URL=... INSTALL_TOKEN=... sh"
     fi
-    step "Membuat .env di $DIR dengan password acak"
+    step "Membuat .env di $DIR dengan user dan password acak"
     sed -e "s/^DATA_PORT=.*/DATA_PORT=$port/" \
         -e "s/^DB_ROOTPASSWORD=\$/DB_ROOTPASSWORD=$(random_text)/" \
+        -e "s/^DB_APPUSER=\$/DB_APPUSER=$(random_user app)/" \
         -e "s/^DB_APPPASS=\$/DB_APPPASS=$(random_text)/" \
+        -e "s/^BACKUP_USER=\$/BACKUP_USER=$(random_user backup)/" \
         -e "s/^BACKUP_PASS=\$/BACKUP_PASS=$(random_text)/" \
         "$WORK/session" > "$DIR/.env.tmp"
     chmod 600 "$DIR/.env.tmp"
@@ -125,7 +131,7 @@ $NAME terpasang.
   Port        : $(env_value DATA_PORT "$DIR/.env")
   Database    : $(env_value DB_NAME "$DIR/.env")
   User aplikasi: $(env_value DB_APPUSER "$DIR/.env")
-  Password    : ada di $DIR/.env, tidak dikirim ke LumbungDB
+  Password    : ada di $DIR/.env, begitu juga user backup; tidak dikirim ke LumbungDB
 
 Batas bawaan 2 CPU dan 2G memori; ubah DB_CPUS dan DB_MEM_LIMIT di .env, lalu jalankan:
   docker compose -p $PROJECT -f $DIR/docker-compose.lumbung.yml --env-file $DIR/.env up -d

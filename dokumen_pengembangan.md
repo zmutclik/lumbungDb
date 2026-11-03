@@ -8,11 +8,15 @@ LumbungDB adalah pusat pengumpul backup dan laporan kesehatan untuk container Ma
 
 Masalah yang dijawab: image MariaDB menulis backup ke volume `/backup` di server yang sama dengan datanya, sehingga backup bisa ikut hilang bersama disk server, dan kegagalan backup baru diketahui saat backup dibutuhkan. LumbungDB memindahkan salinan ke tempat terpisah dan memantau bahwa backup benar-benar datang.
 
-Status per 2 November 2026:
+Status per 3 November 2026:
 
-- Tahap 1 (pengumpulan backup, dashboard status, alert Telegram) belum dimulai; kodenya belum ada. Yang sudah ada baru rancangan di dokumen ini, prototype dashboard dengan data contoh, dan source image `mariadb` lama.
-- Belum ada yang diuji dengan container MariaDB asli dan NFS Synology sungguhan.
-- Tahap 2 sampai 4 (retensi, runner, uji restore, database cadangan, metrik kesehatan, lapisan AI) masih rancangan, lihat bagian Roadmap.
+- Kode tahap 1 (pengumpulan backup, dashboard status, alert Telegram, image, dan kendali backup) sudah ada. Uji otomatisnya lolos pada 3 November 2026: 203 tes pytest, dan uji ujung-ke-ujung `scripts/e2e.sh` lolos dua kali berturut-turut (144 pemeriksaan) dengan container MariaDB asli, nginx, enkripsi `age`, dan pemulihan sungguhan dari file terenkripsi.
+- Uji ujung-ke-ujung itu memakai folder lokal sebagai NAS dan Telegram tiruan. Belum ada yang diuji dengan NFS Synology sungguhan, Telegram sungguhan, atau data produksi.
+- Audit keamanan tahap 1 belum selesai: kandidat temuannya belum divalidasi, dan audit dilanjutkan setelah semua kode selesai.
+- Kode tahap 3 (metrik dari agen, tabel `metrics`, laporan harian dan mingguan, alert perkiraan disk) sudah ada dan lolos uji otomatis dengan data contoh pada 3 November 2026. Belum ada database nyata yang mengirim metrik tujuh hari.
+- Tahap 2 (retensi, runner penuh, uji restore, database cadangan, Restore sekarang dan manual) belum selesai: baru fondasi runner. Tahap 4 (lapisan AI) masih rancangan, lihat bagian Roadmap.
+- Keputusan 3 November 2026: retensi di NAS harian 30 hari, bulanan 12 bulan, dan binlog 3 hari. Backup dienkripsi di agen sebelum dikirim, lihat Enkripsi backup di bagian Keamanan.
+- Keputusan 3 November 2026: aplikasi baru dipakai setelah lengkap, jadi tidak ada data produksi yang masuk di antara tahap. Tahap 2 sampai 4 dibangun dengan data contoh, dan semua gerbang menjadi uji penerimaan sebelum pemakaian pertama. Lihat Roadmap.
 - Perubahan rancangan 1 November 2026: file bernama sama dengan isi berbeda kini disimpan sebagai versi baru. Perubahan ini termasuk tahap 1 dan wajib selesai sebelum dipakai untuk data produksi.
 - Perubahan rancangan 1 November 2026: umur backup dihitung dari waktu pembuatan, bukan waktu diterima, dan alert dump dinilai per database dengan aturan sendiri untuk `_users`. Perubahan ini juga termasuk tahap 1 dan wajib selesai sebelum produksi.
 - Perubahan rancangan 1 November 2026: pemeriksaan NAS dipisahkan ke proses kecil dengan batas waktu, supaya NFS yang macet tidak menghentikan alert. Perubahan ini juga termasuk tahap 1 dan wajib selesai sebelum produksi.
@@ -323,7 +327,7 @@ Script Restore manual memakai header `X-Restore-Token`, ada di tahap 2, dan berb
 
 Token yang salah, kedaluwarsa, atau dicabut dijawab 401, dan mesin selain yang terikat dijawab 403. Percobaan token salah dibatasi per alamat IP.
 
-Header opsional untuk upload: `X-SHA256` berisi checksum file. Bila ada dan tidak cocok, file ditolak. `X-File-Mtime` berisi waktu ubah file di server, dan selalu dikirim agen; dipakai bila waktu di nama file tidak bisa dibaca. `X-Backup-Request` berisi ID permintaan, dikirim bila file adalah hasil permintaan backup. `X-Binlog-Start` berisi nama binlog awal, dikirim untuk full.
+Upload hanya menerima nama berakhiran `.gz.age` dengan awal file format `age`; selain itu ditolak. Header opsional untuk upload: `X-SHA256` berisi checksum file terenkripsi. Bila ada dan tidak cocok, file ditolak. `X-Plain-SHA256` berisi checksum isi sebelum enkripsi, dan selalu dikirim agen; dipakai untuk mengenali kiriman ulang dan versi. `X-File-Mtime` berisi waktu ubah file di server, dan selalu dikirim agen; dipakai bila waktu di nama file tidak bisa dibaca. `X-Backup-Request` berisi ID permintaan, dikirim bila file adalah hasil permintaan backup. `X-Binlog-Start` berisi nama binlog awal, dikirim untuk full.
 
 Aturan `relpath`: maksimal satu segmen untuk `fullbackup` dan `binlog`, dua segmen (`<db>/<file>`) untuk `databases`. Tiap segmen hanya boleh huruf, angka, `_`, `.`, `-`, dan tidak boleh diawali titik.
 
@@ -371,7 +375,8 @@ Tabel yang ditambahkan tahap berikutnya:
 | `backup_requests` | 1 | Permintaan backup: jenis, peminta, status, waktu tiap status, hasil, dan file yang dihasilkan |
 | `control_log` | 1 | Riwayat perubahan jadwal dan permintaan backup: siapa, kapan, nilai lama dan baru |
 | `metrics` | 3 | Deret waktu metrik |
-| `reports` | 3 | Snapshot laporan saat terbit, teks AI, dan input AI-nya |
+| `metric_counters` | 3 | Nilai kumulatif terakhir tiap penghitung `SHOW GLOBAL STATUS`, untuk selisih dan deteksi restart |
+| `reports` | 3 | Snapshot laporan saat terbit; teks AI dan input AI-nya menyusul di tahap 4 |
 
 Struktur folder di NAS meniru struktur `/backup` di container. Folder tidak memakai nama server, supaya riwayat dan rantai backup tidak terpecah bila container pindah server:
 
@@ -420,11 +425,11 @@ Perlu ditambah sebelum dipakai untuk data produksi:
 
 1. **HTTPS.** LumbungDB melayani HTTP biasa, sehingga token dan file lewat jaringan tanpa enkripsi. Pasang reverse proxy dengan SSL beli, sertakan sertifikat perantara (full chain), dan buka port LumbungDB hanya untuk proxy. Layanan tetap hanya di jaringan lokal: DNS internal mengarahkan subdomain sungguhan ke IP proxy. Saat SSL diperpanjang, sertifikat hanya diganti di proxy; agen dan runner tidak menyimpannya.
 2. **Izin NFS di Synology** hanya untuk IP VM LumbungDB, dan akses folder dibatasi ke akun yang perlu. Runner dan agen tidak diberi akses NFS. Satu pengecualian: saat pemulihan darurat, admin membuka izin read-only sementara untuk server tujuan, lalu mencabutnya.
-3. **Enkripsi di NAS** (volume atau shared folder terenkripsi) atau enkripsi file di agen sebelum dikirim.
+3. **Enkripsi di agen** sebelum file dikirim, lihat Enkripsi backup. Kunci privat disimpan di luar LumbungDB, dan satu pemulihan dari file terenkripsi sudah dilatih dengan kunci pemulihan.
 4. **Jalankan container LumbungDB sebagai user non-root.** Container ini tidak boleh memasang Docker socket. User-nya disesuaikan dengan pemetaan UID NFS.
 5. **Izin file `.env`, `config/agents.conf`, dan `config/runners.conf` 600** karena berisi token Telegram, token agen, dan token runner.
 6. **Perlindungan aksi tulis:** token CSRF dan pemeriksaan `Origin`, seperti di Spesifikasi API.
-7. **Rotasi token** bila ada server yang dicurigai bocor: ganti tokennya di `config/agents.conf`, restart LumbungDB, lalu perbarui `LUMBUNG_TOKEN` di `.env` container tersebut dan buat ulang container-nya. MariaDB ikut restart.
+7. **Rotasi token** bila ada server yang dicurigai bocor: ganti tokennya di `config/agents.conf`, restart LumbungDB, lalu perbarui `LUMBUNG_TOKEN` di `.env` container tersebut dan buat ulang container-nya. MariaDB ikut restart. Langkah lengkapnya ada di bagian Merotasi token agen di `README.md`.
 
 Perlu ada sebelum runner dipakai (tahap 2):
 
@@ -452,6 +457,20 @@ Perlu ada sebelum image dipakai:
 - **Helper root yang sempit.** Yang butuh root hanya `lumbung-helper`, script kecil milik root yang dipanggil agen lewat `sudo` dengan satu aturan tanpa password. Helper hanya menerima dua aksi: `apply-schedule` (validasi jadwal, tulis crontab, ganti `schedule.json`) dan `run-backup` (`full`, `dump` dengan nama database opsional, atau `binlog`). Compose tidak memasang `no-new-privileges`, karena `sudo` membutuhkannya.
 - **Agen tidak terpisah dari data.** Agen satu container dengan database, jadi celah pada agen bisa membaca file backup, memakai jatah CPU dan disk, serta lewat helper mengubah jadwal atau memicu backup. Celah itu tidak langsung memberi akses ke datadir dan password. Agen tidak membuka port dan hanya memakai library bawaan Python.
 - **Perubahan tercatat.** Tiap perubahan jadwal dan permintaan backup masuk `control_log`.
+
+### Enkripsi backup
+
+Backup dienkripsi di agen dengan `age` sebelum meninggalkan container, jadi NAS dan LumbungDB hanya memegang file terenkripsi. Bila VM LumbungDB atau NAS dibobol, isi backup tetap tidak terbaca.
+
+- **Kunci publik di server, kunci privat di luar.** LumbungDB menyimpan kunci publik di `BACKUP_AGE_RECIPIENTS` dan menyertakannya di `.env` container sebagai `LUMBUNG_AGE_RECIPIENTS`. Container hanya memegang kunci publik.
+- **Dua penerima.** Tiap file dienkripsi untuk kunci runner dan kunci pemulihan, dan salah satunya cukup untuk membukanya. Kunci runner ada di mesin runner (tahap 2). Kunci pemulihan disimpan offline, misalnya di dua tempat fisik terpisah.
+- **Kunci hilang berarti backup hilang.** Tidak ada cara memulihkan file tanpa salah satu kunci privat. Latih pemulihan dengan kunci pemulihan sebelum data produksi masuk.
+- **Tanpa kunci publik tidak ada kiriman.** LumbungDB menolak start bila nilainya tidak valid, dan agen tidak mengirim file bila nilainya kosong, lalu melaporkannya sebagai error upload. Tidak ada jalur kirim tanpa enkripsi.
+- **Penerima menolak file tanpa enkripsi.** Nama harus berakhiran `.gz.age` dan awal file harus format `age`. Pemeriksaan ini hanya membuktikan format, bukan siapa penerimanya.
+- **Pengenal versi.** Hasil enkripsi selalu berbeda walaupun isinya sama, jadi kiriman ulang dikenali dari `X-Plain-SHA256`, checksum isi sebelum enkripsi. Checksum ini menunjukkan apakah dua file sama, tetapi tidak membuka isinya. Bila metadata hilang, file yang dikirim ulang menjadi versi baru di NAS karena tidak bisa dibandingkan.
+- **Yang tetap terlihat.** Nama database, waktu, dan ukuran file tetap terbaca di nama file dan metadata.
+- **Di server database.** File di `/backup` tetap tidak terenkripsi, karena script backup dan restore lokal memakainya. Saat mengirim, agen membuat salinan terenkripsi sementara di `/backup/.lumbung/agent/spool` lalu menghapusnya, jadi volume itu perlu ruang kosong sebesar file terbesar.
+- **Ganti kunci.** Mengganti penerima hanya berlaku untuk file baru, jadi kunci privat lama tetap disimpan selama file lama masih ada di NAS.
 
 ## Deployment dan operasional
 
@@ -536,7 +555,7 @@ Batas tahap 1: bila Telegram gagal dijangkau, kegagalan hanya dicatat di log Lum
 
 ## Roadmap
 
-Pengembangan dibagi empat tahap berurutan; satu gerbang di antara dua tahap harus terpenuhi sebelum tahap berikutnya dimulai. Belum ada tanggal yang ditetapkan.
+Pengembangan dibagi empat tahap berurutan. Aplikasi baru dipakai setelah keempatnya selesai (keputusan 3 November 2026), jadi tahap berikutnya boleh dibangun dengan data contoh sebelum gerbang tahap sebelumnya terbukti. Semua gerbang wajib lolos di lingkungan nyata sebelum pemakaian pertama. Belum ada tanggal yang ditetapkan.
 
 | Urutan | Isi | Syarat lanjut |
 | --- | --- | --- |
@@ -548,7 +567,7 @@ Pengembangan dibagi empat tahap berurutan; satu gerbang di antara dua tahap haru
 | Gerbang 3: Laporan andal | Angka laporan terbukti dari data nyata | Syarat Selesai bila di Rancangan tahap 3 terpenuhi |
 | Tahap 4 | Lapisan AI di atas laporan | Syarat Selesai bila di Rancangan tahap 4 terpenuhi |
 
-Gerbang "Siap produksi" sengaja diletakkan sebelum tahap 2 karena data produksi baru boleh masuk setelah tahap 1 terbukti aman (lihat Keamanan dan Pengujian). Image `zmutclik/mariadb:lumbungdb-*` dan kendali backup termasuk syarat gerbang ini, karena sidecar tidak dipasang ke produksi.
+Data produksi baru boleh masuk setelah semua gerbang terbukti, termasuk "Siap produksi" (lihat Keamanan dan Pengujian). Uji singkat NFS sungguhan dengan data contoh sebaiknya dilakukan sebelum tahap 2 dibangun terlalu jauh, karena tahap 2 bergantung pada asumsi NFS yang sama. Image `zmutclik/mariadb:lumbungdb-*` dan kendali backup termasuk syarat gerbang ini, karena sidecar tidak dipasang ke produksi.
 
 Isi tahap 2, yang belum punya bagian rancangan sendiri:
 
@@ -588,8 +607,8 @@ Container MariaDB:  agen --> crontab --> script --> /backup --> agen --> upload
 
 - Source image dari project `mariadb` pindah ke folder `mariadb/` di project LumbungDB, bersama riwayat git-nya, dan dipublikasikan di repo `zmutclik/mariadb` dengan tag `lumbungdb-<versi>`, misalnya `lumbungdb-12.3-a1`, menggantikan tag lama di repo itu. `build-image.sh` ikut memakai tag baru. Kode agen ada di `mariadb/agent/` dan ikut masuk image saat build.
 - Compose referensi `mariadb/docker-compose.lumbung.yml` mengambil tag dari `IMAGE_TAG` di `.env`, tanpa nilai bawaan, jadi compose gagal bila variabel ini kosong. Tag berisi versi MariaDB dan versi agen, misalnya `12.3-a1`, bukan `latest`. Tag yang sama untuk versi MariaDB memastikan pembaruan agen tidak ikut menaikkan MariaDB.
-- Tambah container di dashboard menyediakan satu perintah pasang, dan untuk container lama juga isi `.env` serta perintah `docker compose -p <project> -f docker-compose.lumbung.yml --env-file .env up -d`. Isi `.env` mencakup `LUMBUNG_URL`, yang mengikuti alamat dashboard yang sedang dibuka admin, `LUMBUNG_TOKEN`, `IMAGE_TAG`, `BINLOG_UNSENT_MAX_DAYS`, serta `CONTAINER_NAME` dan `CONTAINER_HOSTNAME` yang berisi nama container; identitas server dibaca agen dari mesinnya. Token tampil sekali seperti sekarang. Password database dibuat script di server, atau diisi admin pada pasang manual, dan tidak pernah disimpan atau dibuat LumbungDB.
-- Perintah pasangnya `curl -fsSL <url>/install.sh | LUMBUNG_URL=<url> INSTALL_TOKEN=lmi_xxx sh`. Aturannya: token berlaku `INSTALL_COMMAND_HOURS`, terikat ke mesin pertama yang memakainya, dan mati setelah agen mengirim heartbeat atau saat diganti perintah baru. Script memeriksa Docker dan port, menolak volume atau container yang sudah ada, membuat `.env` izin 600 dengan password acak, menjalankan compose, lalu menunggu MariaDB sehat. Dijalankan ulang di mesin dan folder yang sama, script memakai `.env` yang sudah ada, jadi password tidak berubah. Admin mengisi nama dan port; nama database dan user aplikasi diturunkan dari nama container. Script bersifat statis, jadi checksum-nya bisa disimpan di runbook.
+- Tambah container di dashboard menyediakan satu perintah pasang, dan untuk container lama juga isi `.env` serta perintah `docker compose -p <project> -f docker-compose.lumbung.yml --env-file .env up -d`. Isi `.env` mencakup `LUMBUNG_URL`, yang mengikuti alamat dashboard yang sedang dibuka admin, `LUMBUNG_TOKEN`, `IMAGE_TAG`, `BINLOG_UNSENT_MAX_DAYS`, serta `CONTAINER_NAME` dan `CONTAINER_HOSTNAME` yang berisi nama container; identitas server dibaca agen dari mesinnya. Token tampil sekali seperti sekarang. User dan password database dibuat acak oleh script di server, atau diisi admin pada pasang manual, dan tidak pernah disimpan atau dibuat LumbungDB.
+- Perintah pasangnya `curl -fsSL <url>/install.sh | LUMBUNG_URL=<url> INSTALL_TOKEN=lmi_xxx sh`. Aturannya: token berlaku `INSTALL_COMMAND_HOURS`, terikat ke mesin pertama yang memakainya, dan mati setelah agen mengirim heartbeat atau saat diganti perintah baru. Script memeriksa Docker dan port, menolak volume atau container yang sudah ada, membuat `.env` izin 600 dengan user dan password acak, menjalankan compose, lalu menunggu MariaDB sehat. Dijalankan ulang di mesin dan folder yang sama, script memakai `.env` yang sudah ada, jadi user dan password tidak berubah. Admin mengisi nama dan port; nama database diturunkan dari nama container, sedangkan user aplikasi (`app_<acak>`) dan user backup (`backup_<acak>`) dibuat acak. User `root` tetap bernama `root`, dengan password acak. Pasang manual untuk container lama tetap menyebut `user_backup`, karena user itu sudah ada di volume-nya. Script bersifat statis, jadi checksum-nya bisa disimpan di runbook.
 - `<project>` diturunkan dari nama container: huruf kecil, dan karakter selain huruf, angka, `_`, `-` menjadi `-`. Nama yang menghasilkan project sama dengan container lain ditolak, misalnya `rad.db` dan `rad-db`, karena di satu server keduanya akan berbagi volume.
 - Container sementara, database cadangan, dan container hasil restore memakai image yang sama, jadi dijalankan tanpa `LUMBUNG_*` dan dengan `BACKUP_CRON`, `DUMP_CRON`, serta `BINLOG_CRON` berisi `off`. Tanpa aturan ini, salinan bisa membuat backup sendiri, atau mengirim heartbeat atas nama container asli bila `.env`-nya ikut tersalin.
 - Bila `LUMBUNG_URL` kosong, agen tidak berjalan dan image bekerja seperti sekarang: cron tetap membuat backup di `/backup`, dan arsip binlog dihapus setelah full berhasil tanpa memeriksa catatan terkirim.
@@ -874,6 +893,14 @@ Prinsip rancangan:
 - Laporan disimpan sebagai snapshot saat terbit dan tidak berubah sesudahnya. Kejadian setelah itu masuk laporan berikutnya.
 - Tiap container dalam laporan periode hanya dihitung sejak tanggal terdaftar.
 
+Keputusan implementasi (3 November 2026):
+
+- Agen membaca metrik lewat user DB `lumbung` (`IDENTIFIED VIA unix_socket`, tanpa password) dengan hak `SHOW VIEW` pada `*.*` dan `SELECT` pada `performance_schema.events_statements_summary_by_digest`. `SHOW VIEW` cukup agar ukuran tabel terlihat di `information_schema.TABLES` tanpa hak baca isi. Volume baru membuatnya lewat `init-backup-user.sh`; volume lama menjalankan SQL di `mariadb/README.md` sekali. Tanpa user itu heartbeat tetap jalan dan laporan menandai "tidak ada metrik".
+- Cuplikan koneksi tiap heartbeat (60 detik) disimpan per jam sebagai nilai terakhir, puncak, dan waktu puncak. Penghitung disimpan sebagai jumlah selisih per jam. Ukuran database dan sepuluh tabel terbesar dikirim sehari sekali.
+- Disk data belum diukur: user `lumbung` tidak boleh menyentuh datadir, jadi hanya sisa ruang `/backup` yang dipantau dan diperkirakan (regresi linear atas 14 hari, alert bila kurang dari `REPORT_DISK_BAD_DAYS`).
+- Laporan terbit di worker pada `REPORT_HOUR` zona `DISPLAY_TIMEZONE` (harian tiap hari, mingguan tiap Senin). Hanya periode terbaru yang diterbitkan; periode yang terlewat karena worker mati tidak diisi ulang.
+- Daftar query terberat dari `performance_schema` disimpan di `heartbeats.info`, belum dimasukkan ke laporan; itu bagian tahap 4.
+
 Selesai bila: dua container nyata mengirim metrik minimal tujuh hari, laporan harian dan mingguan terbit otomatis, dan satu skenario sengaja (mis. backup dihentikan atau disk diisi) memicu peringatan yang benar.
 
 ## Rancangan tahap 4: lapisan AI
@@ -899,7 +926,7 @@ Selesai bila: ringkasan harian terbit otomatis dari metrik nyata, normalisasi qu
 
 ## Pengujian
 
-Kode tahap 1 belum dimulai, jadi belum ada hasil uji. Skenario di bawah wajib lolos lebih dulu secara lokal, dengan file backup contoh bertanda waktu lama dan satu file baru yang sengaja dibuat "sedang ditulis".
+Skenario di bawah wajib lolos lebih dulu secara lokal, dengan file backup contoh bertanda waktu lama dan satu file baru yang sengaja dibuat "sedang ditulis".
 
 | Skenario | Hasil yang diharapkan |
 | --- | --- |
@@ -979,7 +1006,5 @@ Keputusan yang masih menunggu kamu:
 
 - Saluran notifikasi final: Telegram dipakai sebagai bawaan; WhatsApp atau email bisa menjadi tambahan.
 - Penyedia AI: cloud atau lokal, sesuai kebijakan rumah sakit tentang data keluar jaringan.
-- Enkripsi backup: cukup di NAS, atau dienkripsi di agen sebelum dikirim.
-- Kebijakan retensi di NAS. Usulan awal: harian 30 hari, bulanan 12 bulan, dan binlog 3 hari.
 - Container mana yang perlu database cadangan, dan seberapa sering binlog-nya diterapkan.
 - Retensi untuk database yang tidak diuji.

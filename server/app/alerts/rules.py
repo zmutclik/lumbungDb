@@ -31,6 +31,7 @@ class ContainerState:
     dumps: dict[str, datetime] = field(default_factory=dict)    # database → backup_at terbaru
     open_integrity: list[tuple[int, str]] = field(default_factory=list)   # (id, relpath)
     failed_requests: list[tuple[int, str, str]] = field(default_factory=list)   # (id, label, status)
+    disk_full_days: float | None = None         # perkiraan regresi; None = tidak menyusut atau data kurang
 
     @property
     def has_any_backup(self) -> bool:
@@ -163,6 +164,10 @@ def compute_alerts(states: list[ContainerState], nas: NasView, now: datetime, se
         if state.effective and state.effective.get("full") == "off":
             alerts.append(AlertItem(f"schedule-off:{state.name}", "Jadwal", "bad",
                                     "Jadwal full dimatikan", state.name, short="Jadwal full mati"))
+        if state.disk_full_days is not None and state.disk_full_days < settings.REPORT_DISK_BAD_DAYS:
+            alerts.append(AlertItem(f"diskfull:{state.name}", "Disk", "bad",
+                                    f"Disk /backup diperkirakan penuh dalam {state.disk_full_days:.0f} hari",
+                                    state.name, short="Disk hampir penuh"))
         for request_id, label, status in state.failed_requests:
             alerts.append(AlertItem(f"request:{request_id}", "Permintaan", "warn",
                                     f"Permintaan {label} {status.lower()}", state.name,

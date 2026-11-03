@@ -14,6 +14,7 @@ from app.containers.service import ensure_row
 from app.core.config import settings
 from app.core.database import db_now_plus
 from app.nas import service as nas_service
+from app.reports import ingest as metrics_ingest
 from app.agents.dependencies import registry
 
 KINDS = ("full", "dump", "binlog")
@@ -49,7 +50,9 @@ def request_label(kind: str, database: str | None) -> str:
 # ---------- heartbeat ----------
 async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, ip: str | None = None) -> dict:
     """Jawaban berisi jadwal bila versinya berubah dan permintaan backup yang menunggu."""
-    info = {**data.model_dump(exclude={"server", "machine_id", "schedule"}), "ip": ip}
+    info = {**data.model_dump(exclude={"server", "machine_id", "schedule", "metrics"}), "ip": ip}
+    if data.metrics is not None:
+        info["metrics"] = {"performance_schema": data.metrics.performance_schema, "digests": data.metrics.digests}
     async with db.begin():
         await ensure_row(db, container)
         stmt = insert(Heartbeat).values(
@@ -59,6 +62,7 @@ async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, 
             server=stmt.inserted.server, machine_id=stmt.inserted.machine_id, at=func.now(), info=stmt.inserted.info,
         ))
         schedule = await _sync_schedule(db, container, data)
+        await metrics_ingest.ingest(db, container, data.metrics, data.disk, await db.scalar(select(func.now())))
         pending = (await db.execute(
             select(BackupRequest.id, BackupRequest.kind, BackupRequest.database)
             .where(BackupRequest.container == container, BackupRequest.status == "Menunggu",

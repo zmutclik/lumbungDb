@@ -1,7 +1,7 @@
 """Tambah container dengan satu perintah: token berbatas waktu, terikat ke satu mesin, dan mati setelah agen terhubung.
 
 Token agen berumur panjang tidak masuk riwayat shell; script mengambilnya dari sini dan menulisnya ke .env di server.
-Password database dibuat script di server dan tidak pernah dikirim ke LumbungDB.
+User dan password database dibuat acak oleh script di server dan tidak pernah dikirim ke LumbungDB.
 """
 import hashlib
 import logging
@@ -43,21 +43,25 @@ def install_command(url: str, token: str) -> str:
 
 
 def env_text(name: str, token: str, url: str, port: int = DEFAULT_PORT, *, scripted: bool = False) -> str:
-    """Isi .env. scripted=True: untuk script pasang, yang mengisi password-nya di server."""
-    database, app_user = "", ""
+    """Isi .env. scripted=True: untuk script pasang, yang mengisi user dan password acak di server.
+
+    Pasang manual tetap menyebut user_backup, karena container lama membawa user itu di volume-nya.
+    """
+    database, backup_user = "", "user_backup"
     if scripted:
         database = re.sub(r"[^A-Za-z0-9_]", "_", re.sub(r"[-_.]db$", "", name, flags=re.IGNORECASE))
-        app_user = f"{database[:28]}_app"
+        backup_user = ""
     return "\n".join((
-        "### LumbungDB", f"LUMBUNG_URL={url}", f"LUMBUNG_TOKEN={token}", "",
+        "### LumbungDB", f"LUMBUNG_URL={url}", f"LUMBUNG_TOKEN={token}",
+        f"LUMBUNG_AGE_RECIPIENTS={settings.BACKUP_AGE_RECIPIENTS}", "",
         "### Image. Container lama: samakan versi MariaDB, mis. 11.4-a1",
         f"IMAGE_TAG={settings.IMAGE_TAG_DEFAULT}", "",
         "### Container", *([f"COMPOSE_PROJECT_NAME={project_name(name)}"] if scripted else []),
         f"CONTAINER_NAME={name}", f"CONTAINER_HOSTNAME={name}", f"DATA_PORT={port}", "",
         "### Dibuat script di server ini; LumbungDB tidak menyimpannya" if scripted
         else "### Isi sendiri di server; LumbungDB tidak menyimpannya",
-        "DB_ROOTPASSWORD=", f"DB_APPUSER={app_user}", "DB_APPPASS=", f"DB_NAME={database}",
-        "BACKUP_USER=user_backup", "BACKUP_PASS=", "",
+        "DB_ROOTPASSWORD=", "DB_APPUSER=", "DB_APPPASS=", f"DB_NAME={database}",
+        f"BACKUP_USER={backup_user}", "BACKUP_PASS=", "",
         "### Kosong = jadwal bawaan; bisa diubah dari dashboard", "BACKUP_CRON=", "DUMP_CRON=", "BINLOG_CRON=", "",
         "### Batas tahan arsip binlog yang belum terkirim, dalam hari; sesudahnya dihapus",
         "BINLOG_UNSENT_MAX_DAYS=3",

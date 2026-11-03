@@ -12,7 +12,7 @@ class Backup(Base):
 
     __tablename__ = "backups"
     __table_args__ = (
-        UniqueConstraint("container", "kind", "relpath", "sha256", name="uq_backups_version"),
+        UniqueConstraint("container", "kind", "relpath", "plain_sha256", name="uq_backups_version"),
         Index("ix_backups_latest", "container", "kind", "database", "backup_at"),   # backup terakhir, linimasa
         Index("ix_backups_binlog", "container", "kind", "binlog_no"),               # rantai binlog
         Index("ix_backups_page", "container", "id"),                                # riwayat, keyset
@@ -26,7 +26,8 @@ class Backup(Base):
     relpath: Mapped[str] = mapped_column(String(255))
     stored_path: Mapped[str] = mapped_column(String(512))          # relatif terhadap folder NAS
     size: Mapped[int] = mapped_column(BigInteger)
-    sha256: Mapped[str] = mapped_column(CHAR(64))
+    sha256: Mapped[str] = mapped_column(CHAR(64))                  # file terenkripsi di NAS
+    plain_sha256: Mapped[str] = mapped_column(CHAR(64))            # isi sebelum enkripsi, dari agen: pengenal versi
     backup_at: Mapped[datetime] = mapped_column()                  # waktu pembuatan: dasar umur dan alert
     received_at: Mapped[datetime] = mapped_column(server_default=func.now())
     request_id: Mapped[int | None] = mapped_column(BigInteger)     # kosong = backup terjadwal

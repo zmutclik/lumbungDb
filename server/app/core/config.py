@@ -1,4 +1,6 @@
-from pydantic import Field
+import re
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,12 +30,19 @@ class Settings(BaseSettings):
 
     # Agen dan penyimpanan
     AGENTS_FILE: str = "/config/agents.conf"
+    RUNNERS_FILE: str = "/config/runners.conf"
+    RUNNER_DOWNLOAD_MAX_CONCURRENT: int = 2   # per proses web; terpisah dari batas upload
+    RUNNER_DOWNLOAD_MAX_MBPS: int = 500       # per unduhan
+    RUNNER_MAX_TOTAL: int = 2                 # tugas berjalan bersamaan di semua runner
+    JOB_TIMEOUT_MINUTES: int = 60             # diperpanjang tiap laporan langkah
     DATA_DIR: str = "/data"              # mount NFS
     MOUNT_MARKER: str = ".lumbung-mounted"   # kosong = cek penanda dimatikan
     MOUNT_PROBE_TIMEOUT_SECONDS: int = 10
     UPLOAD_MAX_CONCURRENT: int = 4       # total semua proses web; dibagi rata per proses
     WEB_CONCURRENCY: int = 2
     NAS_STATUS_STALE_SECONDS: int = 300  # status lebih tua dari ini = pengecek berhenti; upload ditolak
+    # Kunci publik age, dipisah koma. Kunci privat tidak pernah ada di server ini.
+    BACKUP_AGE_RECIPIENTS: str = Field(min_length=62)
     IMAGE_TAG_DEFAULT: str = "12.3-a1"   # nilai contoh di .env yang disediakan Tambah container
     INSTALL_COMMAND_HOURS: int = 2       # batas waktu perintah pasang di Tambah container
 
@@ -50,6 +59,23 @@ class Settings(BaseSettings):
     ALERT_DB_EXPECTED_DAYS: int = 30
     RENOTIFY_HOURS: int = 12
     BACKUP_REQUEST_TTL_MINUTES: int = 15
+
+    # Kesehatan database dan laporan (tahap 3). Angka awal, belum diukur pada database sebenarnya.
+    METRICS_RETENTION_DAYS: int = 90
+    REPORT_HOUR: int = Field(default=7, ge=0, le=23)   # jam lokal (DISPLAY_TIMEZONE) laporan harian dan mingguan terbit
+    REPORT_CONN_WARN_PERCENT: int = 80
+    REPORT_HITRATIO_MIN: int = 95
+    REPORT_SLOW_QUERIES_MAX: int = 100
+    REPORT_DISK_WARN_DAYS: int = 14
+    REPORT_DISK_BAD_DAYS: int = 7
+    REPORT_FORECAST_DAYS: int = 14              # riwayat disk yang dipakai regresi
+
+    @field_validator("BACKUP_AGE_RECIPIENTS")
+    @classmethod
+    def _valid_recipients(cls, value: str) -> str:
+        if not all(re.fullmatch(r"age1[0-9a-z]{58}", item) for item in value.split(",")):
+            raise ValueError("BACKUP_AGE_RECIPIENTS harus berisi kunci publik age, dipisah koma tanpa spasi")
+        return value
 
 
 settings = Settings()

@@ -13,6 +13,7 @@ from app.containers.models import Container, Heartbeat
 from app.core.config import settings
 from app.integrations import telegram
 from app.nas import service as nas_service
+from app.reports import service as report_service
 from app.nas.service import NasView
 from app.agents.dependencies import registry
 
@@ -37,6 +38,9 @@ async def load_states(db: AsyncSession) -> list[ContainerState]:
             state.requested_version, state.applied_version = row.requested_version, row.applied_version
             state.source = row.source
             state.schedule_error = row.error_message
+    for container, days in (await report_service.disk_forecasts(db, await db.scalar(select(func.now())))).items():
+        if state := states.get(container):
+            state.disk_full_days = days
     latest_kind: dict[tuple[str, str], datetime] = {}
     for row in (await db.execute(
         select(Backup.container, Backup.kind, Backup.database, func.count().label("files"),

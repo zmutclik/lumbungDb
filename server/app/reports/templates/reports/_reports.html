@@ -1,0 +1,20 @@
+{% import "dashboard/_macros.html" as ui %}
+<div {{ ui.live(request) }}>
+<div class="page-head"><div><h1>Laporan</h1><div class="sub">Laporan harian hanya memuat yang bermasalah; mingguan memuat tren. Terbit otomatis dan tidak berubah sesudahnya.</div></div></div>
+<nav class="tabs" aria-label="Jenis laporan">
+  <a class="tab{% if kind == 'daily' %} on{% endif %}" href="/reports?jenis=daily">Harian</a>
+  <a class="tab{% if kind == 'weekly' %} on{% endif %}" href="/reports?jenis=weekly">Mingguan</a>
+</nav>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Periode</th><th>Container bermasalah</th><th>Diterbitkan</th></tr></thead><tbody>
+{% for report in reports %}
+{% set problems = report.data.containers | selectattr("findings") | list %}
+<tr class="{% if problems %}row-warn{% endif %}">
+  <td><a href="/reports/{{ report.id }}">{{ report.period_start | tanggal_saja }}{% if kind == 'weekly' %} – {{ report.period_end | tanggal_saja }}{% endif %}</a></td>
+  <td>{{ problems | length }} dari {{ report.data.checked }}</td>
+  <td>{{ report.created_at | tanggal }}</td>
+</tr>
+{% else %}
+<tr><td colspan="3"><div class="empty"><b>Belum ada laporan</b>Laporan pertama terbit setelah hari berganti.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+</div>

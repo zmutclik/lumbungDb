@@ -50,7 +50,7 @@ class AgentEntries:
         return set(self.active) | set(self.disabled)
 
 
-def parse(text: str) -> AgentEntries:
+def parse(text: str, label: str = "agents.conf") -> AgentEntries:
     active: dict[str, str] = {}
     disabled: set[str] = set()
     projects: dict[str, str] = {}
@@ -65,16 +65,16 @@ def parse(text: str) -> AgentEntries:
             continue
         match = _LINE.match(line)
         if not match or not NAME.fullmatch(match.group("name")):
-            raise AgentsFileError(f"agents.conf baris {number}: format harus 'nama = token' dengan nama yang valid")
+            raise AgentsFileError(f"{label} baris {number}: format harus 'nama = token' dengan nama yang valid")
         name, token = match.group("name"), match.group("token")
         if len(token) < TOKEN_MIN_LENGTH:
-            raise AgentsFileError(f"agents.conf baris {number}: token kurang dari {TOKEN_MIN_LENGTH} karakter")
+            raise AgentsFileError(f"{label} baris {number}: token kurang dari {TOKEN_MIN_LENGTH} karakter")
         if name in active:
-            raise AgentsFileError(f"agents.conf baris {number}: nama {name} ganda")
+            raise AgentsFileError(f"{label} baris {number}: nama {name} ganda")
         project = project_name(name)
         if project in projects:
             raise AgentsFileError(
-                f"agents.conf baris {number}: {name} dan {projects[project]} menghasilkan project compose {project}"
+                f"{label} baris {number}: {name} dan {projects[project]} menghasilkan project compose {project}"
             )
         projects[project] = name
         active[name] = token
@@ -84,6 +84,7 @@ def parse(text: str) -> AgentEntries:
 class AgentRegistry:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
+        self.label = self.path.name
         self._signature: tuple[int, int] | None = None
         self._entries = AgentEntries({}, frozenset())
 
@@ -106,7 +107,7 @@ class AgentRegistry:
         if signature == self._signature and not strict:
             return
         try:
-            self._entries = parse(self.path.read_text())
+            self._entries = parse(self.path.read_text(), self.label)
             self._signature = signature
         except AgentsFileError:
             if strict:
@@ -171,7 +172,7 @@ class AgentRegistry:
         token = secrets.token_urlsafe(24)
 
         def change(current: str) -> str:
-            entries = parse(current)
+            entries = parse(current, self.label)
             error = self.name_error(name, entries)
             if error is None:
                 for other in extra_names:

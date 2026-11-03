@@ -50,6 +50,7 @@ if [ -n "$LUMBUNG_URL" ]; then
             # env -i: agen tidak mewarisi password database
             gosu lumbung env -i PATH=/usr/bin:/bin HOME=/backup/.lumbung/agent LANG=C.UTF-8 \
                 LUMBUNG_URL="$LUMBUNG_URL" LUMBUNG_TOKEN="$LUMBUNG_TOKEN" \
+                LUMBUNG_AGE_RECIPIENTS="${LUMBUNG_AGE_RECIPIENTS:-}" \
                 BACKUP_DIR="${BACKUP_DIR:-/backup}" \
                 INTERVAL_SECONDS="${INTERVAL_SECONDS:-60}" \
                 STABLE_SECONDS="${STABLE_SECONDS:-120}" \

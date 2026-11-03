@@ -8,8 +8,9 @@ from app.core.config import settings
 
 KINDS = ("fullbackup", "databases", "binlog")
 _SEGMENT = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
-_LOCAL_ARCHIVE = re.compile(r"^(?P<base>[^.]+\.\d+)\.\d{8}_\d{6}\.gz$")
-_BINLOG = re.compile(r"^[^.]+\.(?P<no>\d{1,9})\.gz$")   # muat di kolom INT
+SUFFIX = ".gz.age"       # hanya file terenkripsi yang diterima
+_LOCAL_ARCHIVE = re.compile(r"^(?P<base>[^.]+\.\d+)\.\d{8}_\d{6}\.gz\.age$")
+_BINLOG = re.compile(r"^[^.]+\.(?P<no>\d{1,9})\.gz\.age$")   # muat di kolom INT
 _STAMP = re.compile(r"(\d{8}_\d{6})")
 _NAME_TZ = ZoneInfo(settings.DISPLAY_TIMEZONE)   # script di image memakai Asia/Jakarta
 _MAX_FUTURE = timedelta(hours=1)
@@ -30,7 +31,7 @@ class UploadPath:
 
 
 def parse_upload_path(kind: str, relpath: str) -> UploadPath:
-    """Maksimal satu segmen untuk fullbackup dan binlog, dua untuk databases; hanya .gz. Upaya ../ ditolak di sini."""
+    """Maksimal satu segmen untuk fullbackup dan binlog, dua untuk databases; hanya .gz.age. Upaya ../ ditolak di sini."""
     if kind not in KINDS:
         raise InvalidPath("kind tidak dikenal")
     segments = relpath.split("/")
@@ -38,7 +39,7 @@ def parse_upload_path(kind: str, relpath: str) -> UploadPath:
         raise InvalidPath("relpath tidak valid")
     if not all(_SEGMENT.fullmatch(segment) for segment in segments):
         raise InvalidPath("nama file tidak valid")
-    if not segments[-1].endswith(".gz"):
+    if not segments[-1].endswith(SUFFIX):
         raise InvalidPath("nama file tidak valid")
     if kind == "databases" and len(segments[0]) > 64:
         raise InvalidPath("nama database terlalu panjang")
@@ -48,7 +49,7 @@ def parse_upload_path(kind: str, relpath: str) -> UploadPath:
         # <nama>.<waktu>.gz hanya nama lokal di container; di NAS hanya ada satu skema versi
         local = _LOCAL_ARCHIVE.fullmatch(filename)
         if local:
-            filename = f"{local.group('base')}.gz"
+            filename = f"{local.group('base')}{SUFFIX}"
         match = _BINLOG.fullmatch(filename)
         if not match:
             raise InvalidPath("nama binlog tidak valid")

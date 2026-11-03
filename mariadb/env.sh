@@ -23,6 +23,7 @@ cp ./env.sample ./.env
     -e "/^DB_ROOTPASSWORD=/s/=.*/=$(gen_pass)/" \
     -e "/^DB_APPUSER=/s/=.*/=user_$(openssl rand -hex 4)/" \
     -e "/^DB_APPPASS=/s/=.*/=$(gen_pass)/" \
+    -e "/^BACKUP_USER=/s/=.*/=backup_$(openssl rand -hex 4)/" \
     -e "/^BACKUP_PASS=/s/=.*/=$(gen_pass)/" \
     ./.env
 chmod 600 ./.env
