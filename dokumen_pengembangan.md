@@ -11,6 +11,7 @@ Masalah yang dijawab: image MariaDB menulis backup ke volume `/backup` di server
 Status per 3 November 2026:
 
 - Kode tahap 1 (pengumpulan backup, dashboard status, alert Telegram, image, dan kendali backup) sudah ada. Uji otomatisnya lolos pada 3 November 2026: 203 tes pytest, dan uji ujung-ke-ujung `scripts/e2e.sh` lolos dua kali berturut-turut (144 pemeriksaan) dengan container MariaDB asli, nginx, enkripsi `age`, dan pemulihan sungguhan dari file terenkripsi.
+- `scripts/e2e.sh` dijalankan lagi setelah tahap 2 dan 3 ditambahkan (3 November 2026, sesudah antrean notifikasi dan pindai ulang NAS): 144 pemeriksaan lolos, tanpa regresi. Skrip ini belum mencakup runner, metrik, atau database cadangan; itu dibuktikan lewat `scripts/sim/runner_real.py` dan `scripts/sim/standby_real.py`.
 - Uji ujung-ke-ujung itu memakai folder lokal sebagai NAS dan Telegram tiruan. Belum ada yang diuji dengan NFS Synology sungguhan, Telegram sungguhan, atau data produksi.
 - Audit keamanan tahap 1 belum selesai: kandidat temuannya belum divalidasi, dan audit dilanjutkan setelah semua kode selesai.
 - Kode tahap 3 (metrik dari agen, tabel `metrics`, laporan harian dan mingguan, alert perkiraan disk) sudah ada dan lolos uji otomatis dengan data contoh pada 3 November 2026. Belum ada database nyata yang mengirim metrik tujuh hari.
