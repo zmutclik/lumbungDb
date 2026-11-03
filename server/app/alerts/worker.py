@@ -22,6 +22,7 @@ from app.nas.monitor import NasMonitor
 from app.agents.dependencies import registry
 from app.reports import ingest as metrics_ingest
 from app.reports import service as report_service
+from app.runners import scheduling as runner_scheduling
 from app.runners import service as runner_service
 from app.runners.dependencies import registry as runner_registry
 
@@ -36,6 +37,8 @@ async def tick(factory: async_sessionmaker, monitor: NasMonitor, client: httpx.A
         await container_service.sync_with_file(db)
         await control_service.expire_requests(db)
         await runner_service.expire_jobs(db)
+        await runner_scheduling.ensure_defaults(db)
+        await runner_scheduling.schedule_due_tests(db)
         await alert_service.run_check(db, client)
         await report_service.publish_due(db, client)
 

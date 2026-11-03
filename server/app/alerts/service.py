@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.integrations import telegram
 from app.nas import service as nas_service
 from app.reports import service as report_service
+from app.runners import scheduling as runner_scheduling
 from app.nas.service import NasView
 from app.agents.dependencies import registry
 
@@ -90,7 +91,7 @@ async def current_alerts(db: AsyncSession) -> tuple[list[ContainerState], NasVie
     now = await db.scalar(select(func.now()))
     states = await load_states(db)
     nas = await nas_service.get_view(db)
-    alerts = compute_alerts(states, nas, now, settings)
+    alerts = compute_alerts(states, nas, now, settings) + await runner_scheduling.runner_alerts(db)
     since = dict((await db.execute(select(Alert.key, Alert.since))).all())
     return states, nas, alerts, since, now
 
@@ -126,7 +127,8 @@ async def run_check(db: AsyncSession, client: httpx.AsyncClient) -> None:
         now = await db.scalar(select(func.now()))
         states = await load_states(db)
         nas = await nas_service.get_view(db)
-    items = compute_alerts(states, nas, now, settings)
+        runner_items = await runner_scheduling.runner_alerts(db)
+    items = compute_alerts(states, nas, now, settings) + runner_items
     messages = await reconcile(db, states, items, now)
     # Tanpa transaksi terbuka. Gagal kirim hanya dicatat di log dan dicoba lagi saat pengingat berikutnya.
     for message in messages:

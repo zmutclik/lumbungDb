@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     RUNNER_DOWNLOAD_MAX_CONCURRENT: int = 2   # per proses web; terpisah dari batas upload
     RUNNER_DOWNLOAD_MAX_MBPS: int = 500       # per unduhan
     RUNNER_MAX_TOTAL: int = 2                 # tugas berjalan bersamaan di semua runner
+    DEFAULT_RUNNER: str = ""                  # runner uji dan cadangan untuk container baru; kosong = diatur manual
+    RESTORE_TEST_DEFAULT: str = "30 3 * * 0"   # jadwal uji bawaan: tiap Minggu 03:30 (jam DISPLAY_TIMEZONE)
     JOB_TIMEOUT_MINUTES: int = 60             # diperpanjang tiap laporan langkah
     DATA_DIR: str = "/data"              # mount NFS
     MOUNT_MARKER: str = ".lumbung-mounted"   # kosong = cek penanda dimatikan
