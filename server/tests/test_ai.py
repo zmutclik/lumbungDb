@@ -276,3 +276,102 @@ async def test_regenerate_route(client, csrf, monkeypatch):  # noqa: F811
     assert again.status_code == 200
     async with async_session_factory() as db:
         assert (await db.scalars(select(AiSummary))).one().id == first.id
+
+
+# ---------- penyaring log ----------
+from app.ai.scrub import scrub_line, scrub_log  # noqa: E402
+
+LOG_CASES = [
+    ("ERROR 1062: Duplicate entry 'Budi Santoso' for key 'PRIMARY'", "ERROR 1062: Duplicate entry '?' for key '?'"),
+    ('Cannot add row: nama = "O\'Brien" gagal', 'Cannot add row: nama = "?" gagal'),
+    ("upload 20261104_pasien_3201010101010001.sql.gz.age gagal HTTP 503", "upload ?_pasien_?.sql.gz.age gagal HTTP 503"),
+    ("kirim ke 10.20.30.40 dari pak.budi@rs.example.id", "kirim ke <ip> dari <surel>"),
+    ("checksum a3f9c01d22b7e45f8899aabbccdd berbeda", "checksum <hex> berbeda"),
+    ("baris 42 dari 1500 file, kode 28", "baris 42 dari 1500 file, kode 28"),
+    ("Query gagal: nama = 'Budi tanpa penutup", "Query gagal: nama = '?"),
+    ("path /data/pasien/12345678/file", "path /data/pasien/?/file"),
+]
+
+
+@pytest.mark.parametrize("raw,expected", LOG_CASES)
+def test_log_values_are_removed(raw, expected):
+    assert scrub_line(raw) == expected
+
+
+def test_log_keeps_last_lines_and_drops_empty_ones():
+    lines = [f"baris {i}" for i in range(100)] + ["", "  "]
+    out = scrub_log(lines, max_lines=5)
+    assert out == [f"baris {i}" for i in range(95, 100)]
+    assert scrub_log(None) == [] and scrub_log("a\n\nb") == ["a", "b"] and len(scrub_line("x" * 1000)) == 300
+
+
+# ---------- penjelasan container ----------
+from app.ai.models import AiExplanation  # noqa: E402
+from app.alerts.rules import AlertItem  # noqa: E402
+from app.backup_control.models import BackupRequest  # noqa: E402
+
+SECRETS = ["Budi Santoso", "3201010101010001", "10.20.30.40", "pak.budi@rs.example.id"]
+
+
+async def explain_world():
+    await register(DAY - timedelta(days=30))
+    info = {"disk": {"total": 1000, "free": 50}, "pending": {"count": 3, "bytes": 10},
+            "upload_error": {"message": "HTTP 503", "code": 503, "file": "pasien_3201010101010001.gz.age", "attempts": 4},
+            "log": ["ERROR 1062: Duplicate entry 'Budi Santoso' for key 'PRIMARY'", "kirim ke 10.20.30.40 gagal"]}
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container=NAME, info=info))
+        db.add(BackupRequest(container=NAME, kind="full", requested_by="alice", status="Gagal",
+                             note="mariadb-backup gagal untuk pak.budi@rs.example.id",
+                             log="baris 1\nDuplicate entry 'Budi Santoso'\n"))
+    return [AlertItem("full:siak-db", "Full", "bad", "Full terakhir 3 hari lalu", NAME,
+                      detail="log: nama 'Budi Santoso' di 10.20.30.40")]
+
+
+async def explain(alerts, provider=None, actor="alice"):
+    async with httpx.AsyncClient() as http, async_session_factory() as db:
+        return await ai.explain_container(db, http, NAME, alerts, actor, provider=provider)
+
+
+async def test_explanation_input_is_scrubbed_and_stored():
+    alerts = await explain_world()
+    row = await explain(alerts, providers.FakeProvider(model="uji"))
+    dumped = json.dumps(row.input, ensure_ascii=False)
+    assert not [v for v in SECRETS if v in dumped]
+    data = row.input
+    assert data["alert_aktif"][0]["teks"] == "Full terakhir 3 hari lalu" and data["angka"]["disk_bebas"] == 50
+    assert data["log_agen"][0] == "ERROR 1062: Duplicate entry '?' for key '?'" and "<ip>" in data["log_agen"][1]
+    assert data["permintaan_backup_gagal"][0]["catatan"] == "mariadb-backup gagal untuk <surel>"
+    assert data["kesalahan_kirim"]["message"] == "HTTP 503" and "file" not in data["kesalahan_kirim"]
+    assert row.text.startswith("Ringkasan uji") and (row.requested_by, row.provider) == ("alice", "fake")
+
+
+async def test_explanation_failure_is_recorded_and_ai_off_creates_nothing(monkeypatch):
+    alerts = await explain_world()
+    alerts.append(AlertItem("x", "GAGALKAN", "warn", "GAGALKAN", NAME))
+    row = await explain(alerts, providers.FakeProvider(model="uji"))
+    assert row.text is None and "dipaksa gagal" in row.error
+    monkeypatch.setattr(providers.settings, "AI_PROVIDER", "none")
+    assert await explain(alerts) is None
+    async with async_session_factory() as db:
+        assert len((await db.scalars(select(AiExplanation))).all()) == 1
+        assert (await ai.latest_explanation(db, NAME)).id == row.id
+
+
+async def test_explain_route_and_summary_card(client, csrf, monkeypatch):  # noqa: F811
+    await explain_world()
+    headers = post_headers(csrf)
+    page = await client.get(f"/containers/{NAME}")
+    assert "Penjelasan AI" not in page.text                                    # AI mati: tidak ada kartu
+    assert (await client.post(f"/containers/{NAME}/ai/explain", headers=headers)).status_code == 409
+    monkeypatch.setattr(providers.settings, "AI_PROVIDER", "fake")
+    assert "Jelaskan masalah" in (await client.get(f"/containers/{NAME}")).text
+    assert (await client.post("/containers/tidak-ada/ai/explain", headers=headers)).status_code == 404
+    assert (await client.post(f"/containers/{NAME}/ai/explain", headers={"HX-Request": "true"})).status_code == 403
+    done = await client.post(f"/containers/{NAME}/ai/explain", headers=headers)
+    assert done.status_code == 200 and done.headers["hx-refresh"] == "true"
+    page = await client.get(f"/containers/{NAME}")
+    assert "dibuat AI" in page.text and "Ringkasan uji" in page.text and "Jelaskan lagi" in page.text
+    assert "tidak mengubah atau menekan alert" in page.text
+    async with async_session_factory() as db:
+        row = await ai.latest_explanation(db, NAME)
+    assert not [v for v in SECRETS if v in json.dumps(row.input)]

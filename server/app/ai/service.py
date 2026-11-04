@@ -8,9 +8,11 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.models import AiSummary
+from app.ai.models import AiExplanation, AiSummary
+from app.ai.scrub import scrub_line, scrub_log
 from app.ai.normalize import normalize_query
 from app.ai.providers import Provider, ProviderError, get_provider
+from app.backup_control.models import BackupRequest
 from app.containers.models import Heartbeat
 from app.reports.models import Report
 
@@ -107,3 +109,76 @@ async def summarize(db: AsyncSession, client: httpx.AsyncClient, report_id: int,
 
 async def for_report(db: AsyncSession, report_id: int) -> AiSummary | None:
     return await db.scalar(select(AiSummary).where(AiSummary.report_id == report_id))
+
+
+# ---------- penjelasan keadaan satu container ----------
+SYSTEM_EXPLAIN = (
+    "Kamu membantu admin database rumah sakit memahami masalah pada satu container MariaDB yang dicadangkan. Masukanmu "
+    "JSON: alert aktif yang sudah dinilai aturan biasa, baris log agen dan kegagalan terbaru yang nilainya sudah "
+    "disamarkan (? atau <ip>), dan beberapa angka. Jelaskan dalam bahasa Indonesia, paling banyak enam butir pendek: apa "
+    "yang kemungkinan terjadi, seberapa penting (rendah, sedang, tinggi, mendesak), dan langkah berikutnya yang konkret. "
+    "Aturan: hanya pakai data di masukan dan katakan bila bukti kurang; jangan mengarang penyebab sebagai fakta; jangan "
+    "pernah menyarankan mematikan atau mengabaikan alert; jangan meminta admin mengirim isi data."
+)
+FAILED_STATUS = ("Gagal", "Tidak selesai", "Ditolak")
+
+
+async def explain_input(db: AsyncSession, container: str, alerts: list) -> dict:
+    """Masukan penjelasan: hanya alert, angka, dan baris log yang sudah disaring."""
+    from app.runners.models import Job, RestoreTest
+    info = await db.scalar(select(Heartbeat.info).where(Heartbeat.container == container)) or {}
+    disk = info.get("disk") or {}
+    upload_error = info.get("upload_error") or {}
+    requests = []
+    for row in await db.scalars(select(BackupRequest).where(BackupRequest.container == container, BackupRequest.status.in_(FAILED_STATUS))
+                                .order_by(BackupRequest.id.desc()).limit(3)):
+        requests.append({"jenis": row.kind, "status": row.status, "catatan": scrub_line(row.note or ""), "log": scrub_log(row.log, 8)})
+    tests = []
+    for row in await db.scalars(select(RestoreTest).where(RestoreTest.container == container, RestoreTest.status != "Lolos")
+                                .order_by(RestoreTest.id.desc()).limit(3)):
+        tests.append({"jenis": row.kind, "status": row.status, "langkah": scrub_line(row.failed_step or ""), "log": scrub_log(row.log, 8)})
+    jobs = [{"jenis": j.kind, "status": j.status, "catatan": scrub_line(j.note or "")} for j in await db.scalars(
+        select(Job).where(Job.container == container, Job.status.in_(("Gagal", "Tidak terlaksana")))
+        .order_by(Job.id.desc()).limit(3))]
+    return {
+        "container": container,
+        "alert_aktif": [{"tingkat": a.level, "jenis": a.kind, "teks": scrub_line(a.cond), "rincian": scrub_line(a.detail)}
+                        for a in alerts][:10],
+        "angka": {"disk_bebas": _number(disk.get("free")), "disk_total": _number(disk.get("total")),
+                  "antrean_kirim": _number((info.get("pending") or {}).get("count"))},
+        "kesalahan_kirim": {k: scrub_line(str(v)) for k, v in upload_error.items() if k in ("message", "code", "attempts")},
+        "log_agen": scrub_log(info.get("log")),
+        "permintaan_backup_gagal": requests, "uji_restore_gagal": tests, "tugas_runner_gagal": jobs,
+    }
+
+
+async def explain_container(db: AsyncSession, client: httpx.AsyncClient, container: str, alerts: list, actor: str,
+                            *, provider: Provider | None = None) -> AiExplanation | None:
+    """None bila AI mati. Kegagalan penyedia disimpan sebagai baris dengan `error`."""
+    provider = provider or get_provider()
+    if provider is None:
+        return None
+    async with db.begin():
+        payload = await explain_input(db, container, alerts)
+    text, error = None, None
+    try:
+        text = (await provider.complete(SYSTEM_EXPLAIN, json.dumps(payload, ensure_ascii=False, indent=1), client))[:MAX_TEXT] or None
+        if text is None:
+            error = "penyedia menjawab kosong"
+    except ProviderError as err:
+        error = str(err)[:500]
+    except Exception as err:
+        logger.exception("ai_provider_crashed")
+        error = f"kesalahan tak terduga: {type(err).__name__}"
+    async with db.begin():
+        row = AiExplanation(container=container, requested_by=actor, provider=provider.name, model=provider.model,
+                            input=payload, text=text, error=error)
+        db.add(row)
+        await db.flush()
+        await db.refresh(row)
+    return row
+
+
+async def latest_explanation(db: AsyncSession, container: str) -> AiExplanation | None:
+    return await db.scalar(select(AiExplanation).where(AiExplanation.container == container)
+                           .order_by(AiExplanation.id.desc()).limit(1))

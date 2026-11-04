@@ -1,11 +1,14 @@
 import json
 from datetime import UTC, datetime, time, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
 from sqlalchemy import func, literal_column, select
 
+from app.ai import service as ai_service
+from app.ai.providers import get_provider
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
 from app.backup_control import service as control
@@ -250,7 +253,22 @@ async def _detail_context(db, user, name: str, tab: str) -> dict:
 @router.get("/containers/{name}")
 async def container_summary(name: str, request: Request, user: CurrentUserDep, db: DbSession):
     context = await _detail_context(db, user, name, "ringkasan")
+    context.update(ai_enabled=get_provider() is not None, ai_explanation=await ai_service.latest_explanation(db, name))
     return render(request, "dashboard/container.html", "dashboard/_container_summary.html", context)
+
+
+@router.post("/containers/{name}/ai/explain")
+async def explain_container(name: str, user: CurrentUserDep, db: DbSession):
+    """Penjelasan AI atas keadaan container. Hanya membaca dan menyimpan penjelasan; alert tidak berubah."""
+    if get_provider() is None:
+        raise HTTPException(status_code=409, detail="Lapisan AI belum dinyalakan (AI_PROVIDER).")
+    base = await _base(db, user, "containers")
+    found = _find(base, name)
+    alerts = list(found.alerts)
+    await db.rollback()
+    async with httpx.AsyncClient() as client:
+        await ai_service.explain_container(db, client, name, alerts, user.username)
+    return Response(status_code=200, headers={"HX-Refresh": "true"})
 
 
 @router.get("/containers/{name}/backup")
