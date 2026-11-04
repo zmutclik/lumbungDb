@@ -1,8 +1,12 @@
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy import select
 
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
+from app.ai import service as ai_service
+from app.ai.providers import get_provider
 from app.core.database import DbSession
 from app.core.templating import render
 from app.reports.models import Report
@@ -32,4 +36,19 @@ async def report_page(request: Request, report_id: int, user: CurrentUserDep, db
     report = await db.get(Report, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="Laporan tidak ada.")
-    return render(request, "reports/report.html", "reports/_report.html", {**base, "report": report})
+    ai = await ai_service.for_report(db, report_id)
+    return render(request, "reports/report.html", "reports/_report.html",
+                  {**base, "report": report, "ai": ai, "ai_enabled": get_provider() is not None})
+
+
+@router.post("/reports/{report_id}/ai")
+async def regenerate_ai(report_id: int, user: CurrentUserDep, db: DbSession):
+    """Membuat ulang ringkasan AI, mis. sesudah kegagalan. Hanya mengganti ringkasan; laporan tidak berubah."""
+    if get_provider() is None:
+        raise HTTPException(status_code=409, detail="Lapisan AI belum dinyalakan (AI_PROVIDER).")
+    if await db.get(Report, report_id) is None:
+        raise HTTPException(status_code=404, detail="Laporan tidak ada.")
+    await db.rollback()
+    async with httpx.AsyncClient() as client:
+        await ai_service.summarize(db, client, report_id, force=True)
+    return Response(status_code=200, headers={"HX-Refresh": "true"})

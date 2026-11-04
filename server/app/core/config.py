@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     REPORT_DISK_BAD_DAYS: int = 7
     REPORT_FORECAST_DAYS: int = 14              # riwayat disk yang dipakai regresi
 
+    # Lapisan AI (tahap 4). Mati bila AI_PROVIDER kosong atau "none". Hanya metrik teragregasi dan metadata yang dikirim;
+    # query dinormalisasi lebih dulu (app/ai/normalize.py). Penyedia: claude | ollama | fake
+    AI_PROVIDER: str = "none"
+    AI_MODEL: str = "claude-haiku-5-5"
+    AI_API_KEY: str = ""
+    AI_BASE_URL: str = "https://api.anthropic.com"     # Ollama: mis. http://10.0.0.5:11434
+    AI_TIMEOUT_SECONDS: int = Field(default=60, ge=5)
+    AI_MAX_TOKENS: int = Field(default=800, ge=100)
+
     @field_validator("BACKUP_AGE_RECIPIENTS")
     @classmethod
     def _valid_recipients(cls, value: str) -> str:

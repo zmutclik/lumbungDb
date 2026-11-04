@@ -184,4 +184,9 @@ async def publish_due(db: AsyncSession, client: httpx.AsyncClient) -> list[int]:
         async with db.begin():
             notifications.enqueue(db, summary_text(report), kind="laporan", ref=f"report:{report.id}")
         await notifications.deliver_due(db, client)
+        try:        # sesudah laporan angka terbit dan terkirim: ringkasan AI tidak boleh menghalanginya
+            from app.ai import service as ai_service
+            await ai_service.summarize(db, client, report.id)
+        except Exception:
+            logger.exception("ai_summary_failed")
     return published
