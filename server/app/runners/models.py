@@ -138,3 +138,16 @@ class StandbyRun(Base):
     status: Mapped[str] = mapped_column(String(20))
     note: Mapped[str | None] = mapped_column(String(500))
     at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Promotion(Base):
+    """Naikkan ke production: nama container baru dan port data. Token agen tidak disimpan di sini; diambil dari
+    agents.conf saat runner mengambil tugas."""
+
+    __tablename__ = "promotions"
+
+    job_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("jobs.id"), primary_key=True)
+    new_name: Mapped[str] = mapped_column(String(NAME_LENGTH), ForeignKey("containers.name"))
+    port: Mapped[int] = mapped_column()
+    requested_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

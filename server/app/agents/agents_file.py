@@ -116,6 +116,10 @@ class AgentRegistry:
             logger.exception("agents_file_invalid")
             self._signature = signature
 
+    def writable(self) -> bool:
+        """Penulisan memakai file kunci dan rename di foldernya, jadi izin folder yang menentukan."""
+        return os.access(self.path.parent, os.W_OK | os.X_OK)
+
     def authenticate(self, token: str | None) -> str | None:
         if not token:
             return None

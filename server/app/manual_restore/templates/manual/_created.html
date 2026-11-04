@@ -1,0 +1,11 @@
+<div>
+  <h3>Perintah restore untuk {{ row.new_name }}</h3>
+  <p class="hint">Salin sekarang; token tidak ditampilkan lagi. Jalankan di server tujuan sebagai root atau user di grup docker. Ganti <code>/path/ke/kunci-pemulihan.key</code> dengan lokasi kunci pemulihan age yang disimpan offline: tanpa kunci itu file backup tidak bisa dibuka.</p>
+  <div class="field"><label>Jalankan di server tujuan</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ command }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+  <ul class="hint">
+    <li>Berlaku sampai <b>{{ row.expires_at | tanggal }}</b> dan terikat ke server pertama yang menjalankannya. Bila gagal, perintah yang sama bisa dijalankan ulang di server itu; unduhan dilanjutkan.</li>
+    <li>Script memeriksa Docker, ruang disk, dan port <b>{{ row.port }}</b>, memulihkan, memeriksa hasilnya, membuat user backup baru, lalu mendaftarkan <b>{{ row.new_name }}</b>. Password database baru dibuat di server tujuan dan tidak dikirim ke LumbungDB.</li>
+    <li>Isi script bisa dibaca dulu di <a href="{{ url }}/restore.sh" target="_blank" rel="noopener">{{ url }}/restore.sh</a>.</li>
+  </ul>
+  <div class="modal-actions"><a class="btn btn-pri" href="/containers/{{ name }}/restore-manual">Selesai</a></div>
+</div>

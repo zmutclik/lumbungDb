@@ -13,6 +13,13 @@ services:
       AGE_IDENTITY_FILE: ${AGE_IDENTITY_FILE:?isi AGE_IDENTITY_FILE}
       MARIADB_IMAGE: ${MARIADB_IMAGE:?isi MARIADB_IMAGE}
       RUNNER_VERSION: ${RUNNER_VERSION:-dev}
+      # Database cadangan: alamat dan port awal yang dibuka di mesin ini
+      STANDBY_BIND_ADDRESS: ${STANDBY_BIND_ADDRESS:-127.0.0.1}
+      STANDBY_PORT_BASE: ${STANDBY_PORT_BASE:-33100}
+      # Naikkan ke production: container baru dan datanya ada di PROMOTE_DIR (bawaan <SCRATCH_DIR>/promoted)
+      PROMOTE_DIR: ${PROMOTE_DIR:-}
+      PROMOTE_MEMORY: ${PROMOTE_MEMORY:-2g}
+      PROMOTE_CPUS: ${PROMOTE_CPUS:-2}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SCRATCH_DIR}:${SCRATCH_DIR}

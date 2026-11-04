@@ -8,7 +8,8 @@
 <div class="card card-pad">
   <div class="page-head"><div><h2>Database cadangan</h2></div>
   {% if can_write %}<div class="actions"><button class="btn" hx-get="/containers/{{ view.name }}/cadangan/edit" hx-target="#modal" hx-swap="innerHTML">Ubah</button>
-  <button class="btn btn-pri" hx-get="/containers/{{ view.name }}/cadangan/restore" hx-target="#modal" hx-swap="innerHTML">Restore sekarang</button></div>{% endif %}</div>
+  <button class="btn btn-pri" hx-get="/containers/{{ view.name }}/cadangan/restore" hx-target="#modal" hx-swap="innerHTML">Restore sekarang</button>
+  {% if standby and standby.runner %}<button class="btn btn-danger" hx-get="/containers/{{ view.name }}/cadangan/promote" hx-target="#modal" hx-swap="innerHTML">Naikkan ke production</button>{% endif %}</div>{% endif %}</div>
   <dl class="kv">
     <dt>Kondisi</dt><dd>{% if standby %}<span class="pill pill-{{ 'bad' if broken else 'ok' }}">{{ "Terhenti" if broken else "Siap" }}</span>{% else %}<span class="pill pill-off">Belum ada</span>{% endif %}</dd>
     <dt>Data sampai</dt><dd>{% if standby and standby.data_until %}{{ standby.data_until | tanggal }} · {{ standby.data_until | ago }}{% else %}—{% endif %}</dd>
@@ -23,7 +24,7 @@
 <div class="tbl-wrap"><table class="t"><thead><tr><th>Waktu</th><th>Jenis</th><th>Runner</th><th>Hasil</th><th>Keterangan</th></tr></thead><tbody>
 {% for run in runs %}
 <tr><td>{{ run.at | tanggal }}</td>
-  <td>{{ "Full + binlog" if run.kind == "full" else "Binlog baru" }}{% if run.manual %} <span class="pill pill-wait">Manual</span>{% endif %}</td>
+  <td>{{ {"full": "Full + binlog", "binlog": "Binlog baru", "hapus": "Hapus salinan", "naik": "Naik ke production"}.get(run.kind, run.kind) }}{% if run.manual %} <span class="pill pill-wait">Manual</span>{% endif %}</td>
   <td>{{ run.runner }}</td>
   <td><span class="pill pill-{{ 'ok' if run.status == 'Lolos' else 'bad' if run.status == 'Gagal' else 'warn' }}">{{ run.status }}</span></td>
   <td class="small">{{ run.note or "" }}</td></tr>

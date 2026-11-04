@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     BACKUP_AGE_RECIPIENTS: str = Field(min_length=62)
     IMAGE_TAG_DEFAULT: str = "12.3-a1"   # nilai contoh di .env yang disediakan Tambah container
     INSTALL_COMMAND_HOURS: int = 2       # batas waktu perintah pasang di Tambah container
+    MANUAL_RESTORE_MAX_HOURS: int = 24   # batas terpanjang satu sesi Restore manual, termasuk perpanjangan
 
     # Pengecek alert (proses worker)
     CHECK_INTERVAL_SECONDS: int = 60

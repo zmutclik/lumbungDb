@@ -216,3 +216,87 @@ async def test_restore_now_creates_manual_job_and_runner_switch_on_success(clien
     assert (job.runner, job.requested_by, job.status) == ("runner-2", "alice", "Menunggu")
     unknown = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "hantu"}, headers=headers)
     assert unknown.status_code == 422
+
+
+# ---------- Naikkan ke production ----------
+async def ready_standby(world):
+    from app.runners.models import Standby
+    async with async_session_factory() as db, db.begin():
+        db.add(Standby(container=NAME, runner="runner-1", full_backup_id=1, chain_id=1, applied_binlog_no=3, port=33100))
+
+
+async def test_promote_button_and_dialog_only_with_standby(client, world):
+    assert "Naikkan ke production" not in (await client.get(f"/containers/{NAME}/cadangan")).text
+    assert (await client.get(f"/containers/{NAME}/cadangan/promote")).status_code == 409
+    await ready_standby(world)
+    assert "Naikkan ke production" in (await client.get(f"/containers/{NAME}/cadangan")).text
+    dialog = await client.get(f"/containers/{NAME}/cadangan/promote")
+    assert dialog.status_code == 200 and "tidak bisa dibatalkan" in dialog.text and 'name="new_name"' in dialog.text
+
+
+async def test_promote_requires_confirmation_then_creates_job(client, world):
+    await ready_standby(world)
+    headers = post_headers(world)
+    path = f"/containers/{NAME}/cadangan/promote"
+    no_confirm = await client.post(path, data={"new_name": "siak-db-2", "port": "3306"}, headers=headers)
+    assert no_confirm.status_code == 422 and "konfirmasi" in no_confirm.text
+    bad_name = await client.post(path, data={"new_name": NAME, "port": "3306", "confirm": "yes"}, headers=headers)
+    assert bad_name.status_code == 422 and "sudah terdaftar" in bad_name.text
+    bad_port = await client.post(path, data={"new_name": "siak-db-2", "port": "x", "confirm": "yes"}, headers=headers)
+    assert bad_port.status_code == 422
+    ok = await client.post(path, data={"new_name": "siak-db-2", "port": "3310", "confirm": "yes"}, headers=headers)
+    assert ok.status_code == 200
+    async with async_session_factory() as db:
+        job = (await db.scalars(select(Job).where(Job.kind == "standby_promote"))).one()
+    assert (job.runner, job.container, job.requested_by) == ("runner-1", NAME, "alice")
+    again = await client.post(path, data={"new_name": "siak-db-3", "port": "3311", "confirm": "yes"}, headers=headers)
+    assert again.status_code == 422 and "berjalan" in again.text
+
+
+# ---------- Restore manual ----------
+def manual_form(**over):
+    data = {"full": "", "binlog": "all", "new_name": "siak-db-2", "port": "3310", "hours": "4"}
+    data.update(over)
+    return data
+
+
+async def full_id():
+    from app.backups.models import Backup
+    async with async_session_factory() as db:
+        return str(await db.scalar(select(Backup.id).where(Backup.kind == "fullbackup")))
+
+
+async def test_manual_tab_dialog_and_nav(client, world):
+    page = await client.get(f"/containers/{NAME}/restore-manual")
+    assert page.status_code == 200 and "Belum ada sesi" in page.text
+    assert f'/containers/{NAME}/restore-manual">Restore manual</a>' in (await client.get(f"/containers/{NAME}")).text
+    dialog = await client.get(f"/containers/{NAME}/restore-manual/new")
+    assert dialog.status_code == 200 and "Belum diuji" in dialog.text and 'name="new_name"' in dialog.text
+    assert "masih mengirim heartbeat" in dialog.text          # sumber baru saja mengirim heartbeat
+
+
+async def test_manual_create_shows_command_once_then_extend_and_revoke(client, world):
+    headers = post_headers(world)
+    created = await client.post(f"/containers/{NAME}/restore-manual", data=manual_form(full=await full_id()), headers=headers)
+    assert created.status_code == 200 and "RESTORE_TOKEN=lmr_" in created.text and "AGE_IDENTITY_FILE" in created.text
+    token = created.text.split("RESTORE_TOKEN=")[1].split()[0]
+    page = await client.get(f"/containers/{NAME}/restore-manual")
+    assert "siak-db-2" in page.text and "menunggu dijalankan" in page.text and token not in page.text
+    from app.manual_restore.models import ManualRestore
+    async with async_session_factory() as db:
+        row = (await db.scalars(select(ManualRestore))).one()
+    assert (await client.post(f"/restore-manual/{row.id}/extend", headers=headers)).status_code == 200
+    assert (await client.post(f"/restore-manual/{row.id}/revoke", headers=headers)).status_code == 200
+    assert "Dicabut" in (await client.get(f"/containers/{NAME}/restore-manual")).text
+    assert (await client.post(f"/restore-manual/{row.id}/revoke", headers=headers)).status_code == 409
+
+
+async def test_manual_create_errors_return_form_with_message(client, world):
+    headers = post_headers(world)
+    bad_name = await client.post(f"/containers/{NAME}/restore-manual", data=manual_form(full=await full_id(), new_name=NAME),
+                                 headers=headers)
+    assert bad_name.status_code == 422 and "sudah terdaftar" in bad_name.text and 'id="manual-form"' in bad_name.text
+    no_full = await client.post(f"/containers/{NAME}/restore-manual", data=manual_form(full="x"), headers=headers)
+    assert no_full.status_code == 422 and "Pilih full" in no_full.text
+    assert (await client.post("/containers/tidak-ada/restore-manual", data=manual_form(full=await full_id()),
+                              headers=headers)).status_code == 404

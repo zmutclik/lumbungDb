@@ -14,3 +14,16 @@ Pasang: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compos
 
 Uji sungguhan terhadap Docker tanpa LumbungDB: `python3 scripts/sim/runner_real.py <image>` (tambah `--corrupt` untuk
 memastikan full yang rusak terdeteksi Gagal).
+
+## Naikkan ke production
+
+Tugas `standby_promote` mengubah database cadangan di mesin ini menjadi container production bernama baru:
+user backup baru dibuat (password acak), akun `lumbung_runner` dihapus, datanya dipindah ke
+`PROMOTE_DIR/<nama>/data` (bawaan `<SCRATCH_DIR>/promoted`), lalu container dijalankan dengan `--restart always`, `.env`
+berizin 600 di `PROMOTE_DIR/<nama>/.env`, batas `PROMOTE_MEMORY` dan `PROMOTE_CPUS` (bawaan 2g dan 2), serta port yang
+dipilih admin. Bila ada langkah yang gagal sebelum container terbukti siap tulis tanpa akun runner, datanya dikembalikan,
+akun runner dibuat lagi, dan database cadangan hidup seperti semula.
+
+Data production kemudian berada di disk scratch mesin ini. Pakai `PROMOTE_DIR` di disk yang sama kualitasnya dengan data
+production (terenkripsi, dengan cadangan), dan pastikan `PROMOTE_DIR` satu filesystem dengan `SCRATCH_DIR` supaya
+pemindahan datanya berupa rename, bukan salinan.

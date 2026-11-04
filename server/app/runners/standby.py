@@ -10,8 +10,9 @@ from app.runners.schemas import JobResultIn
 KIND_FULL = "standby_full"
 KIND_APPLY = "standby_apply"
 KIND_REMOVE = "standby_remove"
+KIND_PROMOTE = "standby_promote"
 KINDS = (KIND_FULL, KIND_APPLY)
-ALL_KINDS = (*KINDS, KIND_REMOVE)
+ALL_KINDS = (*KINDS, KIND_REMOVE, KIND_PROMOTE)
 
 
 def binlog_start_number(name: str | None) -> int | None:
@@ -21,7 +22,7 @@ def binlog_start_number(name: str | None) -> int | None:
 
 async def has_active_job(db: AsyncSession, container: str) -> bool:
     return bool(await db.scalar(select(Job.id).where(
-        Job.container == container, Job.kind.in_(KINDS), Job.status.in_(service.UNFINISHED)).limit(1)))
+        Job.container == container, Job.kind.in_((*KINDS, KIND_PROMOTE)), Job.status.in_(service.UNFINISHED)).limit(1)))
 
 
 async def create_full_job(db: AsyncSession, container: str, runner: str, *, requested_by: str | None = None) -> Job:
@@ -83,17 +84,26 @@ async def claim_context(db: AsyncSession, job: Job) -> dict | None:
     if job.kind not in ALL_KINDS:
         return None
     standby = await db.get(Standby, job.container)
-    return {"applied_binlog_no": standby.applied_binlog_no if standby else None,
-            "port": standby.port if standby else None}
+    context = {"applied_binlog_no": standby.applied_binlog_no if standby else None,
+               "port": standby.port if standby else None}
+    if job.kind == KIND_PROMOTE:
+        from app.runners import promote
+        context["promote"] = await promote.claim_context(db, job)
+    return context
 
 
 async def record_result(db: AsyncSession, job: Job, data: JobResultIn, allowed: set[int]) -> None:
     """Dipanggil dari finish_job di dalam transaksinya. Hanya hasil Lolos mengubah keadaan database cadangan."""
     if job.kind not in ALL_KINDS:
         return
-    kind_label = {KIND_FULL: "full", KIND_APPLY: "binlog", KIND_REMOVE: "hapus"}[job.kind]
+    kind_label = {KIND_FULL: "full", KIND_APPLY: "binlog", KIND_REMOVE: "hapus", KIND_PROMOTE: "naik"}[job.kind]
     db.add(StandbyRun(container=job.container, job_id=job.id, runner=job.runner, kind=kind_label,
                       manual=job.requested_by is not None, status=data.status, note=data.note))
+    if job.kind == KIND_PROMOTE:
+        if data.status == "Lolos":
+            from app.runners import promote
+            await promote.record_success(db, job)
+        return
     if job.kind == KIND_REMOVE:
         if data.status == "Lolos":
             row = await db.get(Standby, job.container, with_for_update=True)

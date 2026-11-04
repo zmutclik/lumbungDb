@@ -54,6 +54,14 @@
         proxy_pass http://app;
     }
 
+    # Unduhan script Restore manual: sama dengan unduhan runner.
+    location ~ ^/api/manual/files/ {
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_pass http://app;
+    }
+
     location ~ ^/containers/[^/]+/backup$ {
         limit_req zone=search burst=30 nodelay;
         limit_req_status 429;

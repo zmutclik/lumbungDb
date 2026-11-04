@@ -1,0 +1,22 @@
+<form id="manual-form" hx-post="/containers/{{ name }}/restore-manual">
+  <h3>Restore manual: {{ name }}</h3>
+  {% if error %}<div class="banner banner-bad" role="alert">{{ error }}</div>{% endif %}
+  {% if source_alive %}<div class="banner banner-warn"><b>{{ name }} masih mengirim heartbeat.</b> Restore manual tidak menyentuhnya; pastikan container lama berhenti menerima tulisan sebelum aplikasi diarahkan ke hasil restore, supaya data tidak terpecah.</div>{% endif %}
+  <p class="hint">Memulihkan seluruh container ke server mana pun dengan satu perintah, tanpa runner. Hasilnya terdaftar sebagai container baru dengan token dan folder NAS sendiri.</p>
+  <div class="field"><label for="mr-full">Full yang dipulihkan</label>
+    <select id="mr-full" name="full" required>
+      {% for c in choices %}<option value="{{ c.id }}"{% if (form.full and form.full == c.id|string) or (not form.full and c.default) %} selected{% endif %}>{{ c.backup_at | tanggal }} · {{ c.size | filesize }} · {{ c.proof }}{% if c.proof == "Gagal" %} (gagal uji){% endif %}{% if c.binlogs %} · {{ c.binlogs }} binlog{% endif %}</option>{% else %}<option value="">Belum ada full</option>{% endfor %}</select>
+    <div class="hint">Awalnya full terbaru yang lolos uji. Full yang belum diuji atau gagal uji tetap bisa dipilih; buktinya ditampilkan.</div></div>
+  <div class="field"><label>Binlog</label>
+    <label><input type="radio" name="binlog" value="all"{% if form.binlog != "none" %} checked{% endif %}> Terapkan sampai data terbaru</label>
+    <label><input type="radio" name="binlog" value="none"{% if form.binlog == "none" %} checked{% endif %}> Full saja (kembali ke sebelum kesalahan data)</label></div>
+  <div class="field"><label for="mr-name">Nama container baru</label>
+    <input id="mr-name" name="new_name" value="{{ form.new_name }}" required autocomplete="off" placeholder="mis. simrs-utama-2">
+    <div class="hint">Dicadangkan selama sesi aktif. Tidak boleh sama dengan {{ name }}.</div></div>
+  <div class="field"><label for="mr-port">Port data di server tujuan</label>
+    <input id="mr-port" name="port" type="number" min="1024" max="65535" value="{{ form.port }}" required></div>
+  <div class="field"><label for="mr-hours">Batas waktu sesi</label>
+    <select id="mr-hours" name="hours">{% for h in hours %}<option value="{{ h }}"{% if form.hours == h|string %} selected{% endif %}>{{ h }} jam</option>{% endfor %}</select>
+    <div class="hint">Berlaku sampai pendaftaran selesai; bisa diperpanjang 2 jam.</div></div>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Buat perintah</button></div>
+</form>

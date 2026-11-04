@@ -236,3 +236,91 @@ def test_leftover_containers_removed_on_start(r, tmp_path):
     r.cleanup_leftovers(config(tmp_path), run)
     assert ["docker", "rm", "-f", "-v", "abc", "def"] in calls
     assert any("find /work" in " ".join(c) for c in calls)
+
+
+# ---------- Naikkan ke production ----------
+def promote_job(tmp_path, **over):
+    info = {"name": "siak-db-2", "port": 3310, "token": "tok-123", "age_recipients": "age1abc"}
+    return {"id": 9, "kind": "standby_promote", "container": "siak-db", "files": [],
+            "standby": {"applied_binlog_no": 3, "port": 33100, "promote": {**info, **over}}}
+
+
+def promote_worker(r, tmp_path, calls, fail_on=(), **over):
+    cfg = {**config(tmp_path), "promote_dir": str(tmp_path / "promoted"), "promote_memory": "2g", "promote_cpus": "2"}
+    healthy = (("@@global.skip_networking", (0, "0\t0\tON\t0\n", "")),)
+    worker = r.StandbyRunner(cfg, FakeClient(), promote_job(tmp_path, **over), fake_run(calls, (*fail_on, *healthy)))
+    worker.client.base_url = "https://lumbung.test"
+    current = Path(worker.base, "current")
+    current.mkdir(parents=True)
+    (current / "ibdata1").write_text("data")
+    Path(worker.base, "current.pw").write_text("runner-secret")
+    Path(worker.base, "state.json").write_text("{}")
+    return worker
+
+
+def docker_runs(calls):
+    return [" ".join(c) for c in calls if c[:2] == ["docker", "run"]]
+
+
+def test_promote_creates_backup_user_drops_runner_account_and_starts_production(r, tmp_path):
+    calls = []
+    worker = promote_worker(r, tmp_path, calls)
+    status, _ = worker.execute()
+    assert status == "Lolos", worker.note
+    sql = " ".join(" ".join(c) for c in calls if "CREATE OR REPLACE USER 'user_backup'" in " ".join(c))
+    assert "DROP USER IF EXISTS 'lumbung_runner'@'localhost'" in sql and "BINLOG MONITOR" in sql
+    final = docker_runs(calls)[-1]
+    assert "--name siak-db-2" in final and "-p 3310:3306" in final and "--restart always" in final
+    assert "--event-scheduler=ON" in final and "--read-only" not in final and "--entrypoint" not in final
+    target = tmp_path / "promoted" / "siak-db-2"
+    assert (target / "data" / "ibdata1").read_text() == "data"
+    env = (target / ".env").read_text()
+    assert "LUMBUNG_TOKEN=tok-123" in env and "LUMBUNG_URL=https://lumbung.test" in env and "BACKUP_USER=user_backup" in env
+    assert oct((target / ".env").stat().st_mode & 0o777) == "0o600"
+    assert not Path(worker.base, "current").exists() and not Path(worker.base, "current.pw").exists()
+    assert not Path(worker.base, "state.json").exists()
+
+
+def test_promote_failure_restores_standby_and_runner_account(r, tmp_path):
+    calls = []
+    worker = promote_worker(r, tmp_path, calls, fail_on=(("--name siak-db-2", (1, "", "port sudah dipakai")),))
+    status, _ = worker.execute()
+    assert status == "Tidak terlaksana" and "port sudah dipakai" in worker.note
+    assert Path(worker.base, "current", "ibdata1").read_text() == "data"          # datadir kembali
+    assert Path(worker.base, "current.pw").read_text() == "runner-secret"
+    assert not (tmp_path / "promoted" / "siak-db-2").exists()
+    joined = [" ".join(c) for c in calls]
+    assert any("CREATE OR REPLACE USER 'lumbung_runner'@'localhost' IDENTIFIED BY 'runner-secret'" in c for c in joined)
+    assert "--name lumbung-standby-siak-db " in docker_runs(calls)[-1] + " " and "--read-only" in docker_runs(calls)[-1]
+    assert any(c.startswith("docker rm -f -v siak-db-2") for c in joined)
+
+
+def test_promote_checks_production_state_and_rolls_back_when_runner_account_remains(r, tmp_path):
+    calls = []
+
+    def still_there(args):
+        return ("@@global.skip_networking", (0, "0\t0\tON\t1\n", ""))
+
+    worker = promote_worker(r, tmp_path, calls, fail_on=(still_there(None),))
+    status, _ = worker.execute()
+    assert status == "Gagal" and "lumbung_runner" in worker.note
+    assert Path(worker.base, "current", "ibdata1").exists()
+
+
+def test_promote_refuses_existing_name_and_missing_data(r, tmp_path):
+    calls = []
+    worker = promote_worker(r, tmp_path, calls, fail_on=(("--filter name=^siak-db-2$", (0, "abc123\n", "")),))
+    status, _ = worker.execute()
+    assert status == "Tidak terlaksana" and "sudah ada" in worker.note
+    assert not any("CREATE OR REPLACE USER" in " ".join(c) for c in calls)     # tidak menyentuh data
+    empty = r.StandbyRunner({**config(tmp_path), "promote_dir": str(tmp_path / "p"), "promote_memory": "2g",
+                             "promote_cpus": "2"}, FakeClient(), {**promote_job(tmp_path), "container": "lain"}, fake_run([]))
+    status, _ = empty.execute()
+    assert status == "Tidak terlaksana" and "belum ada database cadangan" in empty.note
+
+
+def test_promote_without_context_is_not_run(r, tmp_path):
+    job = promote_job(tmp_path)
+    job["standby"].pop("promote")
+    worker = r.StandbyRunner({**config(tmp_path), "promote_dir": str(tmp_path / "p")}, FakeClient(), job, fake_run([]))
+    assert worker.execute()[0] == "Tidak terlaksana"

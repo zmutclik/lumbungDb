@@ -60,6 +60,7 @@ class Client:
         parsed = urllib.parse.urlsplit(base_url)
         self.scheme, self.host, self.port = parsed.scheme, parsed.hostname, parsed.port
         self.prefix = parsed.path.rstrip("/")
+        self.base_url = base_url.rstrip("/")
         self.token = token
 
     def _connect(self):
@@ -144,6 +145,11 @@ def purge_dir(path, config, runner=run):
     runner(["docker", "run", "--rm", "--label", LABEL, "--network", "none", "--entrypoint", "bash", "-v", f"{path}:/work",
             config["image"], "-c", "find /work -mindepth 1 -delete"], 600)
     shutil.rmtree(path, ignore_errors=True)
+    if os.path.isdir(path):
+        # Folder kosong yang tertutup (mis. chmod 750 oleh entrypoint image) tidak bisa dibuka rmtree dari user host.
+        parent, name = os.path.split(path.rstrip("/"))
+        runner(["docker", "run", "--rm", "--label", LABEL, "--network", "none", "--entrypoint", "bash", "-v",
+                f"{parent}:/parent", config["image"], "-c", f"rmdir -- /parent/{name}"], 600)
 
 
 class Restorer:
@@ -363,6 +369,7 @@ class Restorer:
 
 
 STANDBY_LABEL = "lumbung.standby=1"
+PROMOTED_LABEL = "lumbung.promoted=1"
 DEFAULT_STANDBY_PORT = 33100
 BINLOG_NAME = re.compile(r"mysql-bin\.(\d+)")
 
@@ -585,6 +592,158 @@ class StandbyRunner(Restorer):
             os.unlink(old_pw)
         return port
 
+    # ---------- naikkan ke production ----------
+    def _offline_sql(self, datadir, suffix, sql):
+        """SQL pada datadir lewat server sementara tanpa jaringan dan tanpa tabel hak akses, seperti saat membuat akun
+        runner. Server dimatikan lagi sesudahnya."""
+        temp = self._mariadbd(f"{self.name}-{suffix}", datadir, LABEL, ["--skip-grant-tables", "--skip-networking"],
+                              ["--network", "none"])
+        self.containers.append(temp)
+        try:
+            self._wait_ready(temp)
+            code, _, err = self._sql(temp, "FLUSH PRIVILEGES; " + sql)
+            if code != 0:
+                raise Failed(f"ubah akun ({suffix})", err.strip()[-300:])
+        finally:
+            self._stop(temp)
+            if temp in self.containers:
+                self.containers.remove(temp)
+
+    def _move_dir(self, src, dst):
+        """Pindah datadir antar-induk. Isi dan folder datadir dimiliki mysql, jadi rename dari user runner di host bisa
+        ditolak (memindahkan folder ke induk lain butuh izin tulis pada foldernya sendiri). Bila ditolak, dipindah dari
+        dalam container dengan satu mount yang menaungi keduanya, jadi tetap rename dan bukan salin."""
+        try:
+            os.rename(src, dst)
+            return
+        except PermissionError:
+            pass
+        common = os.path.commonpath([src, dst])
+        code, _, err = self.run(["docker", "run", "--rm", "--label", LABEL, "--network", "none", "--entrypoint", "bash",
+                                 "-v", f"{common}:/m", self.config["image"], "-c",
+                                 f"mv /m/{os.path.relpath(src, common)} /m/{os.path.relpath(dst, common)}"], 600)
+        if code != 0:
+            raise NotRun("pindah datadir", err.strip()[-300:])
+
+    def _start_standby(self, cur_dir, port):
+        bind = self.config.get("standby_bind", "127.0.0.1")
+        self.run(["docker", "run", "-d", "--name", self.name, "--label", STANDBY_LABEL, "--restart", "unless-stopped",
+                  "-p", f"{bind}:{port}:3306", "--entrypoint", "mariadbd", "-v", f"{cur_dir}:/var/lib/mysql",
+                  self.config["image"], "--user=mysql", f"--socket={SOCKET}", "--event-scheduler=OFF", "--log-bin=OFF",
+                  "--read-only", "--bind-address=0.0.0.0"])
+
+    def promote(self):
+        """Database cadangan menjadi container production bernama baru di mesin ini.
+
+        Urutan: user backup baru dibuat dan akun runner dihapus pada datadir (server sementara), datadir dipindah ke
+        folder container baru, lalu container dijalankan lewat entrypoint image dengan .env berizin 600. Bila ada yang
+        gagal sebelum container terbukti naik dengan user backup baru, datadir dikembalikan, akun runner dibuat lagi,
+        dan database cadangan dihidupkan seperti semula."""
+        info = (self.job.get("standby") or {}).get("promote")
+        if not info:
+            raise NotRun("tugas", "data penaikan tidak terbaca (nama atau token agen tidak ada)")
+        new_name, port, token = info["name"], int(info["port"]), info["token"]
+        cur_dir, cur_pw = self._paths("current")
+        if not os.path.isdir(cur_dir):
+            raise NotRun("database cadangan", "belum ada database cadangan di runner ini")
+        if os.path.exists(os.path.join(self.base, "applying")):
+            raise Failed("terputus saat menerapkan", "penerapan binlog terputus; jalankan Restore sekarang dulu")
+        code, out, _ = self.run(["docker", "ps", "-a", "--filter", f"name=^{new_name}$", "-q"])
+        if code == 0 and out.strip():
+            raise NotRun("nama container", f"container bernama {new_name} sudah ada di mesin ini")
+        target = os.path.join(self.config["promote_dir"], new_name)
+        if os.path.exists(target):
+            raise NotRun("folder", f"{target} sudah ada")
+        runner_password = self._password("current")
+        backup_password = secrets.token_hex(16)
+        state_port = (self.job.get("standby") or {}).get("port") or self._port()
+
+        self.progress("hentikan database cadangan")
+        self._stop(self.name)
+        self.progress("buat user backup baru dan hapus akun runner")
+        try:
+            self._offline_sql(cur_dir, "naik", (
+                "CREATE OR REPLACE USER 'user_backup'@'localhost' "
+                f"IDENTIFIED BY '{backup_password}'; "
+                "GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, RELOAD, PROCESS, BINLOG MONITOR ON *.* "
+                "TO 'user_backup'@'localhost'; "
+                "CREATE USER IF NOT EXISTS 'lumbung'@'localhost' IDENTIFIED VIA unix_socket; "
+                "GRANT SHOW VIEW ON *.* TO 'lumbung'@'localhost'; "
+                "DROP USER IF EXISTS 'lumbung_runner'@'localhost'; FLUSH PRIVILEGES;"))
+        except (NotRun, Failed):
+            self._start_standby(cur_dir, state_port)
+            raise
+        data = os.path.join(target, "data")
+        moved = False
+        try:
+            os.makedirs(target, mode=0o700)
+            self._move_dir(cur_dir, data)
+            moved = True
+            env_path = os.path.join(target, ".env")
+            fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write("\n".join((
+                    f"LUMBUNG_URL={self.client.base_url}", f"LUMBUNG_TOKEN={token}",
+                    f"LUMBUNG_AGE_RECIPIENTS={info['age_recipients']}",
+                    "BACKUP_USER=user_backup", f"BACKUP_PASS={backup_password}",
+                    "BACKUP_CRON=", "DUMP_CRON=", "BINLOG_CRON=", "BINLOG_UNSENT_MAX_DAYS=3",
+                    "MARIADB_AUTO_UPGRADE=1", "")))
+            self.progress("jalankan container production")
+            code, _, err = self.run([
+                "docker", "run", "-d", "--name", new_name, "--hostname", new_name, "--restart", "always",
+                "--label", PROMOTED_LABEL, "--env-file", env_path, "-p", f"{port}:3306",
+                "--memory", self.config["promote_memory"], "--cpus", self.config["promote_cpus"],
+                "-v", f"{data}:/var/lib/mysql", "-v", f"{new_name}-backup:/backup",
+                "-v", "/etc/hostname:/lumbung/server/hostname:ro", "-v", "/etc/machine-id:/lumbung/server/machine-id:ro",
+                self.config["image"], "--event-scheduler=ON"])
+            if code != 0:
+                raise NotRun("jalankan container production", err.strip()[-300:])
+            self._wait_production(new_name, backup_password)
+        except (NotRun, Failed, OSError):
+            self.progress("batalkan: kembalikan database cadangan")
+            self.run(["docker", "rm", "-f", "-v", new_name])
+            if moved:
+                self._move_dir(data, cur_dir)
+            purge_dir(target, self.config, self.run)
+            try:
+                self._offline_sql(cur_dir, "balik", (
+                    f"CREATE OR REPLACE USER 'lumbung_runner'@'localhost' IDENTIFIED BY '{runner_password}'; "
+                    "GRANT ALL PRIVILEGES ON *.* TO 'lumbung_runner'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;"))
+            finally:
+                self._start_standby(cur_dir, state_port)
+                try:
+                    self._wait_account(self.name, runner_password)
+                except (NotRun, Failed):
+                    pass         # hasilnya tetap penaikan gagal; database cadangan diperiksa di restore berikutnya
+            raise
+        for leftover in (cur_pw, os.path.join(self.base, "state.json")):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
+        self.note_ok = f"{new_name} berjalan di port {port}"
+
+    def _wait_production(self, name, password):
+        for _ in range(self.config["ready_seconds"]):
+            # Server sementara milik entrypoint (upgrade) juga menjawab di socket, tapi tanpa jaringan.
+            code, out, _ = self.run(["docker", "exec", "-e", f"MYSQL_PWD={password}", name, "mariadb", "-S", SOCKET,
+                                     "-uuser_backup", "-BN", "-e",
+                                     "SELECT @@global.skip_networking, @@global.read_only, @@global.event_scheduler, "
+                                     "(SELECT COUNT(*) FROM mysql.global_priv WHERE user='lumbung_runner')"], 60)
+            if code == 0 and out.strip():
+                fields = out.split()
+                if fields[0] != "0":
+                    time.sleep(1)
+                    continue
+                if fields[1] != "0":
+                    raise Failed("read_only", "container production masih read_only")
+                if fields[2] != "ON":
+                    raise Failed("event scheduler", f"event scheduler {fields[2]}, seharusnya ON")
+                if fields[3] != "0":
+                    raise Failed("akun runner", "akun lumbung_runner masih ada di hasil restore")
+                return
+            time.sleep(1)
+        _, logs, err = self.run(["docker", "logs", "--tail", "15", name])
+        raise Failed("MariaDB production tidak naik", (logs + err).strip()[-LOG_LIMIT:])
+
     # ---------- penerapan binlog ----------
     def apply_binlogs(self):
         cur_dir, _ = self._paths("current")
@@ -622,9 +781,11 @@ class StandbyRunner(Restorer):
                 self.restore_full()
             elif self.job["kind"] == "standby_remove":
                 self.remove()
+            elif self.job["kind"] == "standby_promote":
+                self.promote()
             else:
                 self.apply_binlogs()
-            status, note = "Lolos", None
+            status, note = "Lolos", getattr(self, "note_ok", None)
         except Failed as exc:
             status, note = "Gagal", f"{exc.step}: {exc.message}"[:500]
         except NotRun as exc:
@@ -711,7 +872,7 @@ class Runner:
             self.client.json("POST", f"/api/runner/jobs/{job['id']}/progress", {"step": step[:200]})
 
         try:
-            if job["kind"] in ("standby_full", "standby_apply", "standby_remove"):
+            if job["kind"] in ("standby_full", "standby_apply", "standby_remove", "standby_promote"):
                 worker = StandbyRunner(self.config, self.client, job, self.run, progress)
                 status, results = worker.execute()
                 note, extra = worker.note, worker.extra
@@ -756,6 +917,9 @@ def load_config():
         "ready_seconds": max(5, int_env("READY_SECONDS", 180)),
         "standby_port_base": int_env("STANDBY_PORT_BASE", DEFAULT_STANDBY_PORT),
         "standby_bind": os.environ.get("STANDBY_BIND_ADDRESS", "127.0.0.1"),
+        "promote_dir": os.environ.get("PROMOTE_DIR") or os.path.join(os.environ.get("SCRATCH_DIR", ""), "promoted"),
+        "promote_memory": os.environ.get("PROMOTE_MEMORY", "2g"),
+        "promote_cpus": os.environ.get("PROMOTE_CPUS", "2"),
     }
 
 

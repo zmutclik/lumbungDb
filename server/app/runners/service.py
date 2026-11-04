@@ -122,6 +122,10 @@ async def finish_job(db: AsyncSession, runner: str, job_id: int, data: JobResult
         job.status = data.status
         job.note = data.note
         job.finished_at = func.now()
+        promoting = job.kind == standby.KIND_PROMOTE
+    if promoting and data.status != "Lolos":
+        from app.runners import promote
+        await promote.abandon(db, job_id)
 
 
 async def download_target(db: AsyncSession, runner: str, job_id: int, backup_id: int, offset: int, ip: str) -> DownloadTarget:

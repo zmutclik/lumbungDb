@@ -4,7 +4,7 @@ from datetime import UTC, datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, select
 
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
@@ -17,13 +17,16 @@ from app.core.templating import render, templates
 from app.dashboard import service as view
 from app.dashboard.schemas import BackupRequestForm, ContainerForm
 from app.installs import service as install_service
+from app.manual_restore import service as manual_service
 from app.nas import scan as nas_scan
 from app.nas import service as nas_service
 from app.notifications import service as notification_service
 from app.runner_admin import service as runner_view
 from app.runners import service as runner_service
+from app.runners import promote as promote_service
 from app.runners import standby as standby_service
 from app.runners.dependencies import registry as runner_registry
+from app.containers.models import Heartbeat
 from app.runners.models import RunnerHeartbeat
 from app.backup_control import cron as cron_lib
 from app.agents.agents_file import AgentsFileWriteError, NameRejected, project_name
@@ -528,6 +531,119 @@ async def standby_restore_now(name: str, request: Request, user: CurrentUserDep,
     except runner_service.RunnerError as err:
         raise HTTPException(status_code=err.status_code, detail=err.detail) from err
     return _done(f"Restore diminta, menunggu runner {runner}.")
+
+
+async def _standby_snapshot(db, name: str) -> dict | None:
+    """Nilai biasa, bukan objek ORM: objek kedaluwarsa begitu transaksi berikutnya selesai atau dibatalkan."""
+    async with db.begin():
+        state = await runner_view.standby_state(db, name)
+        if state is None or not state.runner:
+            return None
+        return {"runner": state.runner, "data_until": state.data_until}
+
+
+@router.get("/containers/{name}/cadangan/promote")
+async def standby_promote_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    state = await _standby_snapshot(db, name)
+    if state is None:
+        raise HTTPException(status_code=409, detail="Belum ada database cadangan yang siap dinaikkan.")
+    return templates.TemplateResponse(request=request, name="runners/_standby_promote.html", context={
+        "name": name, "standby": state, "error": None, "new_name": "", "port": 3306})
+
+
+@router.post("/containers/{name}/cadangan/promote")
+async def standby_promote(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    """Naikkan ke production. Tidak bisa dibatalkan, jadi butuh nama baru dan konfirmasi tertulis."""
+    form = await request.form()
+    new_name = str(form.get("new_name", "")).strip()
+    raw_port = str(form.get("port", "")).strip()
+    state = await _standby_snapshot(db, name)
+    runner_name = state["runner"] if state else ""
+    error = None
+    if form.get("confirm") != "yes":
+        error = "Centang konfirmasi bahwa aksi ini tidak bisa dibatalkan."
+    elif not raw_port.isdigit():
+        error = "Port harus berupa angka."
+    else:
+        try:
+            await promote_service.create(db, name, new_name, int(raw_port), user.username)
+        except NameRejected as err:
+            error = str(err)
+        except AgentsFileWriteError:
+            error = "Tidak bisa menulis config/agents.conf. Tidak ada yang berubah; perbaiki izin file."
+        except runner_service.RunnerError as err:
+            error = err.detail
+    if error:
+        return templates.TemplateResponse(
+            request=request, name="runners/_standby_promote.html", status_code=422,
+            headers={"HX-Retarget": "#promote-form", "HX-Reswap": "outerHTML"},
+            context={"name": name, "standby": state, "error": error, "new_name": new_name, "port": raw_port})
+    return _done(f"Penaikan diminta: {new_name} akan berjalan di runner {runner_name}.")
+
+
+# ---------- Restore manual ----------
+@router.get("/containers/{name}/restore-manual")
+async def container_manual(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    context = await _detail_context(db, user, name, "manual")
+    context.update(sessions=await manual_service.sessions_for(db, name),
+                   choices=await manual_service.full_choices(db, name), max_hours=settings.MANUAL_RESTORE_MAX_HOURS)
+    return render(request, "dashboard/container.html", "manual/_container_manual.html", context)
+
+
+async def _manual_form(request: Request, db, name: str, *, form=None, error: str | None = None, status_code: int = 200):
+    choices = await manual_service.full_choices(db, name)
+    age = await db.scalar(select(func.timestampdiff(literal_column("SECOND"), Heartbeat.at, func.now()))
+                          .where(Heartbeat.container == name))
+    source_alive = age is not None and age <= settings.ALERT_HEARTBEAT_MINUTES * 60      # sumber masih menerima tulisan
+    headers = {"HX-Retarget": "#manual-form", "HX-Reswap": "outerHTML"} if error else {}
+    return templates.TemplateResponse(
+        request=request, name="manual/_new_dialog.html", status_code=status_code, headers=headers,
+        context={"name": name, "choices": choices, "error": error, "source_alive": source_alive,
+                 "hours": [h for h in manual_service.HOURS_CHOICES if h <= settings.MANUAL_RESTORE_MAX_HOURS],
+                 "form": {k: str(form.get(k, "")) for k in ("full", "binlog", "new_name", "port", "hours")} if form else
+                 {"full": "", "binlog": "all", "new_name": "", "port": "3306", "hours": "4"}})
+
+
+@router.get("/containers/{name}/restore-manual/new")
+async def manual_new_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _manual_form(request, db, name)
+
+
+@router.post("/containers/{name}/restore-manual")
+async def manual_create(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    form = await request.form()
+    try:
+        full_id, port, hours = int(str(form.get("full", ""))), int(str(form.get("port", ""))), int(str(form.get("hours", "")))
+    except ValueError:
+        return await _manual_form(request, db, name, form=form, error="Pilih full, port, dan batas waktu.", status_code=422)
+    try:
+        row, token = await manual_service.create(
+            db, name, full_id, str(form.get("binlog", "")), str(form.get("new_name", "")).strip(), port, hours, user.username)
+    except manual_service.RestoreError as err:
+        if err.status_code == 404:
+            raise HTTPException(status_code=404, detail=err.detail) from err
+        return await _manual_form(request, db, name, form=form, error=err.detail, status_code=422 if err.status_code < 500 else err.status_code)
+    url = _base_url(request)
+    return templates.TemplateResponse(request=request, name="manual/_created.html", context={
+        "name": name, "row": row, "command": manual_service.command(url, token), "url": url})
+
+
+@router.post("/restore-manual/{restore_id}/extend")
+async def manual_extend(restore_id: int, user: CurrentUserDep, db: DbSession):
+    try:
+        await manual_service.extend(db, restore_id, user.username)
+    except manual_service.RestoreError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done("Sesi diperpanjang 2 jam.", modal=False)
+
+
+@router.post("/restore-manual/{restore_id}/revoke")
+async def manual_revoke(restore_id: int, user: CurrentUserDep, db: DbSession):
+    try:
+        await manual_service.revoke(db, restore_id, user.username)
+    except manual_service.RestoreError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done("Sesi dicabut. Token tidak berlaku lagi.", modal=False)
 
 
 # ---------- permintaan backup ----------

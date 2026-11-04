@@ -71,6 +71,8 @@ async def _load_plan(db: AsyncSession) -> tuple[dict[int, str], dict[int, Backup
         RestoreTest.status == "Lolos", RestoreTest.backup_id.is_not(None))))
     busy = set(await db.scalars(
         select(JobFile.backup_id).join(Job, Job.id == JobFile.job_id).where(Job.status.in_(UNFINISHED))))
+    from app.manual_restore import service as manual_service
+    busy |= await manual_service.protected_backup_ids(db)         # sesi Restore manual yang masih aktif
     unreviewed = set(await db.scalars(select(IntegrityEvent.first_backup_id).where(IntegrityEvent.reviewed_at.is_(None))))
     unreviewed |= set(await db.scalars(select(IntegrityEvent.new_backup_id).where(IntegrityEvent.reviewed_at.is_(None))))
     now = await db.scalar(select(func.now()))

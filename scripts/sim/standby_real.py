@@ -162,7 +162,103 @@ remaining = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
 print("setelah hapus: container", alive, "| isi folder", remaining)
 if status != "Lolos" or alive or remaining:
     problems.append(f"penghapusan tidak bersih: {status} {alive} {remaining}")
+
+# ---------- Naikkan ke production: database cadangan baru, lalu dinaikkan menjadi container bernama baru ----------
+NEW, NEW_PORT = "standby-real-prod", 33171
+promote_dir = os.path.join(scratch, "promoted")
+config["promote_dir"], config["promote_memory"], config["promote_cpus"] = promote_dir, "1g", "1"
+sh(f"docker rm -f -v {NEW} >/dev/null 2>&1 || true; docker volume rm -f {NEW}-backup >/dev/null 2>&1 || true")
+status, extra = run_job("standby_full", [full] + [f for f in files if f["kind"] == "binlog"], {"port": PORT})
+if status != "Lolos":
+    problems.append("full untuk uji penaikan tidak lolos")
+else:
+    class FakeClient(Local):
+        base_url = "https://lumbung.example"
+
+    job = {"id": 77, "kind": "standby_promote", "container": CONTAINER, "files": [],
+           "standby": {"applied_binlog_no": extra["standby"]["applied_binlog_no"], "port": PORT,
+                       "promote": {"name": NEW, "port": NEW_PORT, "token": "tok-promote-test", "age_recipients": recipient}}}
+    worker = r.StandbyRunner(config, FakeClient(), job, progress=lambda step: print("   ", step, flush=True))
+    status, _ = worker.execute()
+    print(f"standby_promote: {status} {worker.note or ''}")
+    if status != "Lolos":
+        problems.append(f"penaikan tidak lolos: {worker.note}")
+    else:
+        env = {k: v for k, _, v in (l.partition("=") for l in open(os.path.join(promote_dir, NEW, ".env")).read().splitlines())}
+        if oct(os.stat(os.path.join(promote_dir, NEW, ".env")).st_mode & 0o777) != "0o600":
+            problems.append("izin .env bukan 600")
+
+        def prod(statement, user="user_backup", password=None):
+            pw = password or env["BACKUP_PASS"]
+            return sh(f"docker exec -e MYSQL_PWD={pw} {NEW} mariadb -S /run/mysqld/mysqld.sock -u{user} -BN -e \"{statement}\"").strip()
+
+        print("data di production:", prod("select count(*), sum(v='ubah') from appdb.t"), "| sumber:", expected_final)
+        if prod("select count(*), sum(v='ubah') from appdb.t") != expected_final:
+            problems.append("data production berbeda dari sumber")
+        state = prod("select @@global.read_only, @@global.event_scheduler")
+        print("read_only, event_scheduler:", repr(state))
+        if state != "0\tON":
+            problems.append(f"production tidak siap tulis atau event scheduler mati: {state!r}")
+        accounts = prod("select user from mysql.global_priv where user in ('lumbung_runner')")
+        if accounts:
+            problems.append(f"akun lumbung_runner masih ada: {accounts!r}")
+        # user backup baru bisa menjalankan backup, dan user lama tidak punya password yang diketahui
+        sh(f"docker exec {NEW} bash -c 'mariadb-backup --backup --user=user_backup --password={env['BACKUP_PASS']} "
+           "--stream=xbstream --target-dir=/tmp/bk >/dev/null'")
+        # root hasil restore memakai password sumber ("pw"); user backup memang tidak boleh menulis
+        prod("insert into appdb.t values (999999, 'tulis')", user="root", password="pw")
+        if prod("select v from appdb.t where id=999999") != "tulis":
+            problems.append("tidak bisa menulis di production")
+        if "lumbung-standby" in sh("docker ps -a --format '{{.Names}}'"):
+            problems.append("container database cadangan masih ada")
+        if os.path.isdir(os.path.join(scratch, "standby", CONTAINER, "current")) or \
+                os.path.exists(os.path.join(scratch, "standby", CONTAINER, "current.pw")):
+            problems.append("folder current atau password runner tertinggal")
+        info = sh(f"docker inspect {NEW} --format '{{{{.HostConfig.RestartPolicy.Name}}}} {{{{.Config.Hostname}}}}'").strip()
+        if info != f"always {NEW}":
+            problems.append(f"restart policy atau hostname salah: {info!r}")
+        mounts = sh(f"docker inspect {NEW} --format '{{{{range .Mounts}}}}{{{{.Destination}}}} {{{{end}}}}'").split()
+        if "/var/lib/mysql" not in mounts or "/backup" not in mounts:
+            problems.append(f"mount tidak lengkap: {mounts}")
+        agent_up = "lumbung/agent.py" in sh(f"docker exec {NEW} bash -c 'ps -eo args' ")
+        print("agen berjalan:", agent_up)
+        if not agent_up:
+            problems.append("agen tidak berjalan di container production")
+    # penaikan yang gagal mengembalikan database cadangan (port dipakai container lain)
+    blocker = "standby-real-blocker"
+    sh(f"docker rm -f {blocker} >/dev/null 2>&1 || true")
+sh(f"docker rm -f -v {NEW} >/dev/null 2>&1 || true; docker volume rm -f {NEW}-backup >/dev/null 2>&1 || true")
+r.purge_dir(os.path.join(promote_dir, NEW, "data"), config)
+shutil.rmtree(promote_dir, ignore_errors=True)
+
+# ---------- penaikan gagal: database cadangan dikembalikan utuh, termasuk akun runner ----------
+status, extra = run_job("standby_full", [full] + [f for f in files if f["kind"] == "binlog"], {"port": PORT})
+if status == "Lolos":
+    sh(f"docker run -d --name {blocker} -p {NEW_PORT}:80 nginx:alpine >/dev/null")
+    job = {"id": 78, "kind": "standby_promote", "container": CONTAINER, "files": [],
+           "standby": {"applied_binlog_no": extra["standby"]["applied_binlog_no"], "port": PORT,
+                       "promote": {"name": NEW, "port": NEW_PORT, "token": "t", "age_recipients": recipient}}}
+    worker = r.StandbyRunner(config, FakeClient(), job, progress=lambda step: print("   ", step, flush=True))
+    status, _ = worker.execute()
+    print(f"penaikan gagal: {status} {worker.note or ''}")
+    sh(f"docker rm -f {blocker} >/dev/null 2>&1 || true")
+    if status == "Lolos":
+        problems.append("penaikan seharusnya gagal karena port dipakai")
+    else:
+        alive = sh(f"docker inspect -f '{{{{.State.Running}}}}' {standby_name}").strip()
+        got = read_standby("select count(*) from appdb.t")
+        flags = read_standby("select @@global.read_only")
+        print("setelah gagal: standby hidup", alive, "| baris", got, "| read_only", flags)
+        if alive != "true" or got != expected_final.split()[0] or flags not in ("1", "ON"):
+            problems.append("database cadangan tidak kembali seperti semula setelah penaikan gagal")
+        if os.path.exists(os.path.join(promote_dir, NEW)):
+            problems.append("folder container baru tertinggal setelah gagal")
+        if sh(f"docker ps -aq --filter name=^{NEW}$").strip():
+            problems.append("container baru tertinggal setelah gagal")
+else:
+    problems.append("full untuk uji penaikan gagal tidak lolos")
 print("MASALAH:", problems or "tidak ada")
-sh(f"docker rm -f -v {standby_name} >/dev/null 2>&1 || true")
+sh(f"docker rm -f -v {standby_name} {NEW} >/dev/null 2>&1 || true; docker volume rm -f {NEW}-backup >/dev/null 2>&1 || true")
 r.purge_dir(folder, config)
+shutil.rmtree(promote_dir, ignore_errors=True)
 sys.exit(1 if problems else 0)
