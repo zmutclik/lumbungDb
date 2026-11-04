@@ -375,3 +375,95 @@ async def test_explain_route_and_summary_card(client, csrf, monkeypatch):  # noq
     async with async_session_factory() as db:
         row = await ai.latest_explanation(db, NAME)
     assert not [v for v in SECRETS if v in json.dumps(row.input)]
+
+
+# ---------- tanya-jawab ----------
+from app.ai import qa  # noqa: E402
+from app.ai.models import AiQuestion  # noqa: E402
+from app.reports.models import Metric  # noqa: E402
+
+NOW = DAY + timedelta(days=20)
+
+
+async def qa_world():
+    await register(DAY - timedelta(days=30))
+    async with async_session_factory() as db, db.begin():
+        for day in range(0, 20, 5):
+            at = DAY + timedelta(days=day)
+            db.add(Metric(container=NAME, at=at, name="size_db:simrs", value=1_000_000 + day * 50_000, peak=0))
+            db.add(Metric(container=NAME, at=at, name="size_db:farmasi", value=500_000 + day * 5_000, peak=0))
+            db.add(Metric(container=NAME, at=at, name="size_table:simrs.pasien", value=900_000 + day * 40_000, peak=0))
+            db.add(Metric(container=NAME, at=at, name="connections", value=10, peak=40 + day))
+            db.add(Metric(container=NAME, at=at, name="backup_disk_free", value=9_000_000 - day * 100_000, peak=0))
+
+
+async def ask(question, user="alice", provider=None):
+    async with httpx.AsyncClient() as http, async_session_factory() as db:
+        return await qa.ask(db, http, user, question, provider=provider or providers.FakeProvider(model="uji"))
+
+
+async def test_context_has_only_aggregates_and_ranks_growth():
+    await qa_world()
+    async with async_session_factory() as db, db.begin():
+        context = await qa.build_context(db, NOW)
+    entry = context["container"][0]
+    assert [g["database"] for g in entry["database"]] == ["simrs", "farmasi"]               # tumbuh terbesar dulu
+    simrs = entry["database"][0]
+    assert simrs["selisih_bytes"] == 750_000 and simrs["bytes_sekarang"] == 1_750_000 and simrs["hari_data"] == 15.0
+    assert entry["tabel_terbesar"][0] == {"tabel": "simrs.pasien", "bytes": 1_500_000}
+    assert entry["koneksi_puncak_harian"][-1]["puncak"] == 55 and entry["disk_bebas"]["awal"] == 8_000_000        # jendela 14 hari
+    assert set(entry) <= {"nama", "database", "tabel_terbesar", "koneksi_puncak_harian", "disk_bebas", "full_backup"}
+
+
+async def test_question_is_scrubbed_and_answer_stored_with_context():
+    await qa_world()
+    row = await ask("Kenapa tabel pasien 'Budi Santoso' dengan nomor 3201010101010001 membesar?")
+    assert "Budi" not in row.question and "3201010101010001" not in row.question
+    assert "Budi" not in json.dumps(row.input) and row.input["pertanyaan"] == row.question
+    assert row.answer.startswith("Ringkasan uji") and (row.asked_by, row.provider) == ("alice", "fake")
+    assert row.input["data"]["container"][0]["nama"] == NAME
+
+
+async def test_blank_question_rate_limit_failure_and_off(monkeypatch):
+    await qa_world()
+    for bad in ("", "  ", "'x'", "ab"):
+        with pytest.raises(qa.QaError) as err:
+            await ask(bad)
+        assert err.value.status_code == 422
+    failed = await ask("GAGALKAN sekarang")
+    assert failed.answer is None and "dipaksa gagal" in failed.error
+    monkeypatch.setattr(qa, "MAX_PER_HOUR", 2)
+    await ask("pertanyaan kedua")
+    with pytest.raises(qa.QaError) as err:
+        await ask("pertanyaan ketiga")
+    assert err.value.status_code == 429
+    assert (await ask("pertanyaan akun lain", user="bob")).answer                       # batas per akun
+    monkeypatch.setattr(providers.settings, "AI_PROVIDER", "none")
+    async with httpx.AsyncClient() as http, async_session_factory() as db:
+        assert await qa.ask(db, http, "alice", "apa saja") is None
+
+
+async def test_context_is_trimmed_when_too_large(monkeypatch):
+    await qa_world()
+    monkeypatch.setattr(qa, "MAX_CONTEXT", 200)
+    async with async_session_factory() as db, db.begin():
+        context = qa._fit(await qa.build_context(db, NOW))
+    assert all("tabel_terbesar" not in c and "koneksi_puncak_harian" not in c for c in context["container"])
+
+
+async def test_ask_route_and_reports_page(client, csrf, monkeypatch):  # noqa: F811
+    await qa_world()
+    headers = post_headers(csrf)
+    assert "Tanya data laporan" not in (await client.get("/reports")).text            # AI mati
+    assert (await client.post("/reports/ask", data={"question": "halo apa kabar"}, headers=headers)).status_code == 409
+    monkeypatch.setattr(providers.settings, "AI_PROVIDER", "fake")
+    assert "Tanya data laporan" in (await client.get("/reports")).text
+    assert (await client.post("/reports/ask", data={"question": "halo"}, headers={"HX-Request": "true"})).status_code == 403
+    bad = await client.post("/reports/ask", data={"question": "x"}, headers=headers)
+    assert bad.status_code == 422 and "lebih jelas" in bad.text
+    ok = await client.post("/reports/ask", data={"question": "database mana yang tumbuh paling cepat?"}, headers=headers)
+    assert ok.status_code == 200 and "Ringkasan uji" in ok.text and "paling cepat" in ok.text and "dibuat AI" in ok.text
+    page = await client.get("/reports")
+    assert "paling cepat" in page.text
+    async with async_session_factory() as db:
+        assert len((await db.scalars(select(AiQuestion))).all()) == 1

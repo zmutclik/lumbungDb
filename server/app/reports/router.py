@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
+from app.ai import qa as ai_qa
 from app.ai import service as ai_service
 from app.ai.providers import get_provider
 from app.core.database import DbSession
@@ -27,7 +28,27 @@ async def reports_page(request: Request, user: CurrentUserDep, db: DbSession, je
     base = await _base(db, user, "reports")
     rows = (await db.scalars(
         select(Report).where(Report.kind == kind).order_by(Report.period_start.desc()).limit(60))).all()
-    return render(request, "reports/reports.html", "reports/_reports.html", {**base, "kind": kind, "reports": rows})
+    qa = await ai_qa.history(db, user.username) if get_provider() is not None else None
+    return render(request, "reports/reports.html", "reports/_reports.html",
+                  {**base, "kind": kind, "reports": rows, "qa": qa, "qa_error": None})
+
+
+@router.post("/reports/ask")
+async def ask_ai(request: Request, user: CurrentUserDep, db: DbSession):
+    """Tanya-jawab atas data laporan. Hanya membaca metrik teragregasi; jawaban tersimpan untuk audit."""
+    if get_provider() is None:
+        raise HTTPException(status_code=409, detail="Lapisan AI belum dinyalakan (AI_PROVIDER).")
+    form = await request.form()
+    error = None
+    await db.rollback()
+    try:
+        async with httpx.AsyncClient() as client:
+            await ai_qa.ask(db, client, user.username, str(form.get("question", "")))
+    except ai_qa.QaError as err:
+        error = err.detail
+    history = await ai_qa.history(db, user.username)
+    return render(request, "reports/reports.html", "reports/_qa.html", {"qa": history, "qa_error": error},
+                  status_code=422 if error else 200)
 
 
 @router.get("/reports/{report_id}")

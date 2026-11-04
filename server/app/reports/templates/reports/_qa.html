@@ -1,0 +1,17 @@
+<section class="card card-pad" id="qa">
+  <h2>Tanya data laporan <span class="pill pill-wait">dibuat AI</span></h2>
+  <form hx-post="/reports/ask" hx-target="#qa" hx-swap="outerHTML" hx-disabled-elt="find button">
+    <div class="field"><label for="qa-q">Pertanyaan</label>
+      <input id="qa-q" name="question" maxlength="300" required autocomplete="off" placeholder="mis. database mana yang tumbuh paling cepat bulan ini?">
+      {% if qa_error %}<div class="hint" role="alert" style="color: var(--bad)">{{ qa_error }}</div>{% endif %}</div>
+    <button class="btn btn-pri" type="submit">Tanya</button>
+  </form>
+  <p class="hint">AI hanya membaca ukuran, jumlah, dan temuan laporan (bukan isi data), dan bisa keliru. Pertanyaan disaring sebelum dikirim, dan pertanyaan beserta data yang dikirim tersimpan untuk audit.</p>
+  {% for item in qa %}
+  <div class="qa-item" style="margin-top: 1rem">
+    <b>{{ item.question }}</b>
+    {% if item.answer %}<div style="white-space: pre-wrap">{{ item.answer }}</div>{% else %}<div class="muted">Gagal dijawab: {{ item.error }}</div>{% endif %}
+    <div class="hint">{{ item.provider }} · {{ item.model }} · {{ item.created_at | tanggal }}</div>
+  </div>
+  {% endfor %}
+</section>

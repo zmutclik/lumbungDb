@@ -38,3 +38,20 @@ class AiExplanation(Base):
     text: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AiQuestion(Base):
+    """Tanya-jawab atas data laporan. Pertanyaan disimpan sesudah disaring, bersama konteks persis yang dikirim."""
+
+    __tablename__ = "ai_questions"
+    __table_args__ = (Index("ix_ai_questions_user", "asked_by", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    asked_by: Mapped[str] = mapped_column(String(100))
+    question: Mapped[str] = mapped_column(String(300))
+    provider: Mapped[str] = mapped_column(String(20))
+    model: Mapped[str] = mapped_column(String(80))
+    input: Mapped[dict] = mapped_column(JSON)
+    answer: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
