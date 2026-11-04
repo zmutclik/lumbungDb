@@ -67,6 +67,30 @@ class OllamaProvider(Provider):
             raise ProviderError("jawaban penyedia tidak dikenali") from err
 
 
+class OpenAIProvider(Provider):
+    """API `/chat/completions` yang dipakai banyak gateway dan server lokal (OpenAI, vLLM, LiteLLM, Ollama `/v1`).
+    AI_BASE_URL sudah memuat `/v1`, mis. https://gateway.contoh/v1. Kunci dikirim sebagai Bearer bila diisi."""
+
+    name = "openai"
+
+    async def complete(self, system: str, prompt: str, client: httpx.AsyncClient) -> str:
+        headers = {"Authorization": f"Bearer {settings.AI_API_KEY}"} if settings.AI_API_KEY else {}
+        try:
+            response = await client.post(
+                f"{settings.AI_BASE_URL.rstrip('/')}/chat/completions", timeout=settings.AI_TIMEOUT_SECONDS,
+                headers=headers,
+                json={"model": self.model, "max_tokens": settings.AI_MAX_TOKENS, "stream": False,
+                      "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]})
+        except httpx.HTTPError as err:
+            raise ProviderError(f"tidak terhubung ke penyedia: {type(err).__name__}") from err
+        if response.status_code != 200:
+            raise ProviderError(f"penyedia menjawab HTTP {response.status_code}")
+        try:
+            return str(response.json()["choices"][0]["message"]["content"] or "").strip()
+        except (ValueError, KeyError, IndexError, TypeError) as err:
+            raise ProviderError("jawaban penyedia tidak dikenali") from err
+
+
 class FakeProvider(Provider):
     """Untuk pengembangan dan uji: tanpa jaringan, jawabannya menyebut jumlah container yang diterima."""
 
@@ -78,7 +102,8 @@ class FakeProvider(Provider):
         return f"Ringkasan uji ({len(prompt)} karakter masukan)."
 
 
-PROVIDERS: dict[str, type[Provider]] = {"claude": ClaudeProvider, "ollama": OllamaProvider, "fake": FakeProvider}
+PROVIDERS: dict[str, type[Provider]] = {"claude": ClaudeProvider, "openai": OpenAIProvider, "ollama": OllamaProvider,
+                                         "fake": FakeProvider}
 
 
 def get_provider() -> Provider | None:

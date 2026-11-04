@@ -67,7 +67,7 @@ def test_result_is_bounded_and_idempotent():
 
 # ---------- penyedia ----------
 def test_provider_is_chosen_by_config_only(monkeypatch):
-    for name, cls in (("claude", providers.ClaudeProvider), ("ollama", providers.OllamaProvider), ("fake", providers.FakeProvider)):
+    for name, cls in (("claude", providers.ClaudeProvider), ("openai", providers.OpenAIProvider), ("ollama", providers.OllamaProvider), ("fake", providers.FakeProvider)):
         monkeypatch.setattr(providers.settings, "AI_PROVIDER", name)
         assert type(providers.get_provider()) is cls
     for off in ("none", "", "NONE", "tidak-ada"):
@@ -100,6 +100,26 @@ async def test_claude_errors_never_leak_key(monkeypatch):
     async with httpx.AsyncClient() as http:
         with pytest.raises(providers.ProviderError):
             await providers.ClaudeProvider(model="m").complete("s", "p", http)
+
+
+async def test_openai_provider_request_and_reply(monkeypatch):
+    monkeypatch.setattr(providers.settings, "AI_BASE_URL", "https://gateway.test/v1/")
+    monkeypatch.setattr(providers.settings, "AI_API_KEY", "kunci-rahasia")
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["url"], seen["auth"], seen["body"] = str(request.url), request.headers["authorization"], json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": " siap "}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        assert await providers.OpenAIProvider(model="m").complete("sistem", "isi", http) == "siap"
+    assert seen["url"] == "https://gateway.test/v1/chat/completions" and seen["auth"] == "Bearer kunci-rahasia"
+    assert seen["body"]["stream"] is False and seen["body"]["messages"][0] == {"role": "system", "content": "sistem"}
+    for bad in (httpx.Response(500), httpx.Response(200, json={"choices": []}), httpx.Response(200, text="bukan json")):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r, b=bad: b)) as http:
+            with pytest.raises(providers.ProviderError) as err:
+                await providers.OpenAIProvider(model="m").complete("s", "p", http)
+        assert "kunci-rahasia" not in str(err.value)
 
 
 async def test_ollama_provider_request_and_reply():
