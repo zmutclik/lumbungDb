@@ -15,9 +15,9 @@ COMPOSE=(docker compose -p "$PROJECT" --env-file "$E2E_WORK/.env")
 
 cleanup() {
     [ "${1:-}" = "--keep" ] && return 0
-    docker rm -f lumbunge2e-tls >/dev/null 2>&1 || true
+    docker rm -f -v lumbunge2e-tls >/dev/null 2>&1 || true
     for name in lumbunge2e-baru lumbunge2e-lama lumbunge2e-pasang; do
-        docker rm -f "$name" >/dev/null 2>&1 || true
+        docker rm -f -v "$name" >/dev/null 2>&1 || true
         docker volume rm "${name}_data" "${name}_backup" >/dev/null 2>&1 || true
         docker network rm "${name}_default" >/dev/null 2>&1 || true
     done

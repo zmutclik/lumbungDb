@@ -253,8 +253,21 @@ async def _detail_context(db, user, name: str, tab: str) -> dict:
 @router.get("/containers/{name}")
 async def container_summary(name: str, request: Request, user: CurrentUserDep, db: DbSession):
     context = await _detail_context(db, user, name, "ringkasan")
-    context.update(ai_enabled=get_provider() is not None, ai_explanation=await ai_service.latest_explanation(db, name))
+    context.update(ai_enabled=get_provider() is not None, ai_explanation=await ai_service.latest_explanation(db, name),
+                   ai_queries=await ai_service.latest_explanation(db, name, "query"))
     return render(request, "dashboard/container.html", "dashboard/_container_summary.html", context)
+
+
+@router.post("/containers/{name}/ai/queries")
+async def analyze_queries(name: str, user: CurrentUserDep, db: DbSession):
+    """Analisis slow query. Hanya menyimpan saran; tidak menjalankan apa pun di database."""
+    if get_provider() is None:
+        raise HTTPException(status_code=409, detail="Lapisan AI belum dinyalakan (AI_PROVIDER).")
+    _find(await _base(db, user, "containers"), name)
+    await db.rollback()
+    async with httpx.AsyncClient() as client:
+        await ai_service.analyze_queries(db, client, name, user.username)
+    return Response(status_code=200, headers={"HX-Refresh": "true"})
 
 
 @router.post("/containers/{name}/ai/explain")

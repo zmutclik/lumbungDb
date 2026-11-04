@@ -25,6 +25,7 @@ class MetricsIn(BaseModel):
     performance_schema: bool = False
     sizes: MetricsSizes | None = None
     digests: list[dict] | None = Field(default=None, max_length=10)
+    indexes: list[dict] | None = Field(default=None, max_length=100)
 
 
 class HeartbeatIn(BaseModel):

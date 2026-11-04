@@ -39,7 +39,7 @@ with open(identity, "w") as handle:
     handle.write(keygen)
 recipient = [line.split()[-1] for line in keygen.splitlines() if "public key" in line][0]
 
-sh(f"docker rm -f {SOURCE} {r.standby_container(CONTAINER)} >/dev/null 2>&1 || true")
+sh(f"docker rm -f -v {SOURCE} {r.standby_container(CONTAINER)} >/dev/null 2>&1 || true")
 sh(f"docker run -d --name {SOURCE} -e MARIADB_ROOT_PASSWORD=pw {image} --log-bin=mysql-bin --server-id=1")
 files, ids = [], iter(range(1, 100))
 try:
@@ -89,7 +89,7 @@ try:
     later = archive(start_no + 2)
     expected_final = sql("select count(*), sum(v='ubah') from appdb.t")
 finally:
-    sh(f"docker rm -f {SOURCE}")
+    sh(f"docker rm -f -v {SOURCE}")
 
 
 class Local:

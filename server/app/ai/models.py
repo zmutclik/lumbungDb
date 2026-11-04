@@ -32,6 +32,7 @@ class AiExplanation(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     container: Mapped[str] = mapped_column(String(64), ForeignKey("containers.name"))
     requested_by: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(12), default="keadaan", server_default="keadaan")   # keadaan | query
     provider: Mapped[str] = mapped_column(String(20))
     model: Mapped[str] = mapped_column(String(80))
     input: Mapped[dict] = mapped_column(JSON)

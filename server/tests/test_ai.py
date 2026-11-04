@@ -173,7 +173,7 @@ async def test_input_never_contains_literals_even_from_untrusted_agent():
     assert not [v for v in PII if v in dumped]
     queries = row.input["container_bermasalah"][0]["queries"]
     assert queries == [{"database": "simrs", "query": "SELECT * FROM pasien WHERE nama = ? AND no_rm = ?", "count": 5,
-                        "seconds": 3.0, "rows_examined": 900}]
+                        "seconds": 3.0, "rows_examined": 900, "rows_sent": None, "sinyal": [], "indeks_tabel": {}}]
     assert not re.search(r"'[^']", dumped.replace("'?'", ""))
 
 
@@ -467,3 +467,112 @@ async def test_ask_route_and_reports_page(client, csrf, monkeypatch):  # noqa: F
     assert "paling cepat" in page.text
     async with async_session_factory() as db:
         assert len((await db.scalars(select(AiQuestion))).all()) == 1
+
+
+# ---------- analisis slow query ----------
+from app.ai import queries as ai_queries  # noqa: E402
+
+DIGEST_BAD = {"database": "simrs", "text": "SELECT * FROM pasien p JOIN kunjungan k ON k.pid = p.id WHERE p.nama = 'Budi Santoso' AND p.no_rm = 12345678",
+              "count": 40, "total_ps": 8_000_000_000_000, "rows_examined": 4_000_000, "rows_sent": 400,
+              "no_index_used": 38, "no_good_index_used": 0, "full_join": 2, "tmp_disk_tables": 5}
+INDEXES = [{"database": "simrs", "table": "pasien", "index": "PRIMARY", "unique": True, "columns": ["id"]},
+           {"database": "simrs", "table": "pasien", "index": "idx_nama", "unique": False, "columns": ["nama", "tgl_lahir"]},
+           {"database": "simrs", "table": "lain", "index": "x", "unique": False, "columns": ["a"]}]
+
+
+def test_signals_come_from_counters_only():
+    assert ai_queries.signals(DIGEST_BAD) == [
+        "38 dari 40 eksekusi tanpa index sama sekali (pemindaian penuh)", "2 join tanpa index pada tabel yang digabung",
+        "5 tabel sementara ditulis ke disk", "memeriksa 10000 baris untuk tiap baris yang dikirim"]
+    assert ai_queries.signals({"count": 10, "no_good_index_used": 4}) == ["4 dari 10 eksekusi memakai index yang kurang baik"]
+    assert ai_queries.signals({"count": 3, "rows_examined": 30, "rows_sent": 30}) == []
+    assert ai_queries.signals({"count": "x", "no_index_used": True}) == []
+
+
+def test_tables_are_read_from_real_digest_spacing():
+    text = "SELECT COUNT ( * ) FROM `pasien` `p` JOIN `billing` . `tagihan` `t` ON `t` . `a` = `p` . `a`"
+    assert ai_queries.tables_in(text, "simrs") == {("simrs", "pasien"), ("billing", "tagihan")}
+
+
+def test_entries_normalize_again_and_attach_indexes_of_used_tables_only():
+    out = ai_queries.entries({"digests": [DIGEST_BAD, {"text": 5}, "x"], "indexes": INDEXES + ["bukan dict"]})
+    assert len(out) == 1
+    entry = out[0]
+    assert entry["query"] == "SELECT * FROM pasien p JOIN kunjungan k ON k.pid = p.id WHERE p.nama = ? AND p.no_rm = ?"
+    assert entry["indeks_tabel"] == {"simrs.pasien": ["PRIMARY(id) unik", "idx_nama(nama,tgl_lahir)"]}      # bukan simrs.lain
+    assert entry["seconds"] == 8.0 and not [v for v in PII if v in json.dumps(entry)]
+    assert ai_queries.entries(None) == [] and ai_queries.entries({"digests": None}) == []
+
+
+async def seed_queries(metrics):
+    await register(DAY - timedelta(days=30))
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container=NAME, info={"metrics": metrics}))
+
+
+async def analyze(provider=None):
+    async with httpx.AsyncClient() as http, async_session_factory() as db:
+        return await ai.analyze_queries(db, http, NAME, "alice", provider=provider or providers.FakeProvider(model="uji"))
+
+
+async def test_query_analysis_stores_kind_query_and_clean_input():
+    await seed_queries({"performance_schema": True, "digests": [DIGEST_BAD], "indexes": INDEXES})
+    row = await analyze()
+    assert row.kind == "query" and row.text.startswith("Ringkasan uji")
+    assert row.input["query"][0]["sinyal"] and not [v for v in PII if v in json.dumps(row.input)]
+    async with async_session_factory() as db:
+        assert (await ai.latest_explanation(db, NAME, "query")).id == row.id
+        assert await ai.latest_explanation(db, NAME) is None                          # jenis keadaan terpisah
+
+
+async def test_query_analysis_without_data_does_not_call_the_model():
+    class Never(providers.Provider):
+        name = "tidak"
+
+        async def complete(self, system, prompt, client):
+            raise AssertionError("tidak boleh dipanggil")
+
+    await seed_queries({"performance_schema": False})
+    row = await analyze(Never(model="x"))
+    assert row.text is None and "performance_schema nonaktif" in row.error
+    async with async_session_factory() as db, db.begin():
+        (await db.get(Heartbeat, NAME)).info = {"metrics": {"performance_schema": True, "digests": []}}
+    assert "belum ada pola query" in (await analyze(Never(model="x"))).error
+
+
+async def test_system_prompt_requires_unverified_label_and_standby_testing():
+    assert "EXPLAIN belum dijalankan" in ai.SYSTEM_QUERIES and "belum terverifikasi" in ai.SYSTEM_QUERIES
+    assert "database cadangan" in ai.SYSTEM_QUERIES and "jangan menyarankan index yang sudah ada" in ai.SYSTEM_QUERIES
+
+
+async def test_heartbeat_keeps_digest_counters_and_indexes(client):
+    from tests.test_control import payload
+    from app.agents.dependencies import registry as agents
+    from app.nas.monitor import ProbeResult
+    from app.nas.service import save_result
+    token = agents.add(NAME)
+    async with async_session_factory() as db:
+        await save_result(db, ProbeResult("ok", 1000, 800))
+    metrics = {"status": {"Threads_connected": 3, "Uptime": 10}, "max_connections": 100, "performance_schema": True,
+               "digests": [DIGEST_BAD], "indexes": INDEXES}
+    resp = await client.post("/api/heartbeat", json=payload(metrics=metrics), headers={"X-Token": token})
+    assert resp.status_code == 200, resp.text
+    async with async_session_factory() as db:
+        stored = (await db.get(Heartbeat, NAME)).info["metrics"]
+    assert stored["digests"][0]["no_index_used"] == 38 and stored["indexes"][0]["index"] == "PRIMARY"
+
+
+async def test_queries_route_and_card(client, csrf, monkeypatch):  # noqa: F811
+    await seed_queries({"performance_schema": True, "digests": [DIGEST_BAD], "indexes": INDEXES})
+    headers = post_headers(csrf)
+    assert "Analisis slow query" not in (await client.get(f"/containers/{NAME}")).text          # AI mati
+    assert (await client.post(f"/containers/{NAME}/ai/queries", headers=headers)).status_code == 409
+    monkeypatch.setattr(providers.settings, "AI_PROVIDER", "fake")
+    page = await client.get(f"/containers/{NAME}")
+    assert "Analisis query" in page.text and "EXPLAIN belum dijalankan" in page.text
+    assert (await client.post("/containers/tidak-ada/ai/queries", headers=headers)).status_code == 404
+    assert (await client.post(f"/containers/{NAME}/ai/queries", headers={"HX-Request": "true"})).status_code == 403
+    done = await client.post(f"/containers/{NAME}/ai/queries", headers=headers)
+    assert done.status_code == 200 and done.headers["hx-refresh"] == "true"
+    page = await client.get(f"/containers/{NAME}")
+    assert "Analisis lagi" in page.text and "Ringkasan uji" in page.text and "Jelaskan masalah" in page.text

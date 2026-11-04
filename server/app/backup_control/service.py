@@ -52,7 +52,8 @@ async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, 
     """Jawaban berisi jadwal bila versinya berubah dan permintaan backup yang menunggu."""
     info = {**data.model_dump(exclude={"server", "machine_id", "schedule", "metrics"}), "ip": ip}
     if data.metrics is not None:
-        info["metrics"] = {"performance_schema": data.metrics.performance_schema, "digests": data.metrics.digests}
+        info["metrics"] = {"performance_schema": data.metrics.performance_schema, "digests": data.metrics.digests,
+                           "indexes": data.metrics.indexes}
     async with db.begin():
         await ensure_row(db, container)
         stmt = insert(Heartbeat).values(

@@ -1,6 +1,7 @@
 """Metrik kesehatan MariaDB untuk tahap 3. Dibaca lewat socket sebagai user DB `lumbung` (unix_socket, tanpa password)
 yang hanya punya SHOW VIEW dan SELECT pada satu tabel performance_schema. Tidak ada hak baca isi tabel.
 Semua fungsi mengembalikan None atau daftar kosong bila gagal: metrik tidak pernah menghalangi heartbeat."""
+import re
 import subprocess
 
 DB_SOCKET = "/run/mysqld/mysqld.sock"
@@ -11,6 +12,8 @@ MAX_DATABASES = 50
 MAX_TABLES = 10
 MAX_DIGESTS = 10
 DIGEST_TEXT_LIMIT = 300
+MAX_INDEX_TABLES = 20
+MAX_INDEX_ROWS = 100
 
 # Penghitung kumulatif (selisihnya dihitung LumbungDB) dan nilai sesaat.
 COUNTERS = (
@@ -25,7 +28,11 @@ _VARIABLES_SQL = "SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections
 _SCHEMA_LIST = ",".join(f"'{s}'" for s in SYSTEM_SCHEMAS)
 _SIZES_SQL = ("SELECT table_schema, table_name, COALESCE(data_length,0)+COALESCE(index_length,0) "
               f"FROM information_schema.TABLES WHERE table_schema NOT IN ({_SCHEMA_LIST}) AND table_type='BASE TABLE'")
-_DIGEST_SQL = ("SELECT COALESCE(schema_name,''), digest_text, count_star, sum_timer_wait, sum_rows_examined "
+# Penghitung per pola query tanpa EXPLAIN: EXPLAIN butuh hak baca tabel dan nilai literal, sedangkan penghitung ini sudah
+# menunjukkan pemindaian penuh, join tanpa index, dan tabel sementara di disk.
+_DIGEST_SQL = ("SELECT COALESCE(schema_name,''), digest_text, count_star, sum_timer_wait, sum_rows_examined, "
+               "sum_rows_sent, sum_no_index_used, sum_no_good_index_used, sum_select_full_join, "
+               "sum_created_tmp_disk_tables "
                "FROM performance_schema.events_statements_summary_by_digest "
                f"WHERE COALESCE(schema_name,'') NOT IN ({_SCHEMA_LIST}) AND digest_text IS NOT NULL "
                f"ORDER BY sum_timer_wait DESC LIMIT {MAX_DIGESTS}")
@@ -96,13 +103,59 @@ def collect_digests(runner=subprocess.run):
         return None
     digests = []
     for row in rows:
-        if len(row) != 5 or None in (_number(row[2]), _number(row[3]), _number(row[4])):
+        if len(row) not in (5, 10) or None in (_number(row[2]), _number(row[3]), _number(row[4])):
             continue
-        digests.append({
+        item = {
             "database": row[0][:64], "text": row[1][:DIGEST_TEXT_LIMIT], "count": int(row[2]),
             "total_ps": int(row[3]), "rows_examined": int(row[4]),
-        })
+        }
+        if len(row) == 10:
+            for key, value in zip(("rows_sent", "no_index_used", "no_good_index_used", "full_join", "tmp_disk_tables"),
+                                  row[5:], strict=True):
+                if _number(value) is not None:
+                    item[key] = int(value)
+        digests.append(item)
     return digests
+
+
+_TABLE_REF = re.compile(r"\b(?:from|join|update|into)\s+`?(\w+)`?(?:\s*\.\s*`?(\w+)`?)?", re.IGNORECASE)
+_STATISTICS_SQL = ("SELECT table_schema, table_name, index_name, non_unique, "
+                   "GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') "
+                   "FROM information_schema.STATISTICS WHERE {where} "
+                   "GROUP BY table_schema, table_name, index_name, non_unique LIMIT " + str(MAX_INDEX_ROWS))
+
+
+def referenced_tables(digests):
+    """(database, tabel) yang disebut digest. Hanya nama; digest sudah tanpa nilai literal."""
+    found = []
+    for item in digests:
+        for first, second in _TABLE_REF.findall(item.get("text", "")):
+            pair = (first, second) if second else (item.get("database") or "", first)
+            if pair[0] and pair[0] not in SYSTEM_SCHEMAS and pair not in found:
+                found.append(pair)
+    return found[:MAX_INDEX_TABLES]
+
+
+def _quote(value):
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def collect_indexes(digests, runner=subprocess.run):
+    """Index tabel yang disebut pola query terberat, dari information_schema.STATISTICS (cukup SHOW VIEW). Nama saja."""
+    pairs = referenced_tables(digests)
+    if not pairs:
+        return []
+    where = " OR ".join(f"(table_schema={_quote(db)} AND table_name={_quote(table)})" for db, table in pairs)
+    rows = query(_STATISTICS_SQL.format(where=where), runner, timeout=60)
+    if rows is None:
+        return None
+    indexes = []
+    for row in rows:
+        if len(row) != 5 or _number(row[3]) is None:
+            continue
+        indexes.append({"database": row[0][:64], "table": row[1][:64], "index": row[2][:64], "unique": row[3] == "0",
+                        "columns": [c[:64] for c in row[4].split(",")][:16]})
+    return indexes
 
 
 class Collector:
@@ -126,5 +179,8 @@ class Collector:
                     digests = collect_digests(self.runner)
                     if digests is not None:
                         sample["digests"] = digests
+                        indexes = collect_indexes(digests, self.runner) if digests else []
+                        if indexes is not None:
+                            sample["indexes"] = indexes
                 self.last_sizes_at = now
         return sample

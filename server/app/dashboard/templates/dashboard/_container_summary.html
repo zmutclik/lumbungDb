@@ -11,6 +11,13 @@
   {% else %}<p class="muted">Minta AI menjelaskan alert dan log terbaru container ini dalam bahasa biasa.</p>{% endif %}
   <p class="hint">{% if ai_explanation %}{{ ai_explanation.provider }} · {{ ai_explanation.model }} · {{ ai_explanation.created_at | tanggal }} · diminta {{ ai_explanation.requested_by }}. {% endif %}Yang dikirim hanya alert, angka, dan baris log yang nilainya sudah disamarkan. AI hanya menafsirkan; tidak mengubah atau menekan alert, dan bisa keliru. Masukan persisnya tersimpan untuk audit. <button class="btn" hx-post="/containers/{{ view.name }}/ai/explain" hx-swap="none" hx-disabled-elt="this">{{ "Jelaskan lagi" if ai_explanation else "Jelaskan masalah" }}</button></p>
 </section>
+<section class="card card-pad" id="ai-queries">
+  <h2>Analisis slow query <span class="pill pill-wait">dibuat AI</span></h2>
+  {% if ai_queries and ai_queries.text %}<div style="white-space: pre-wrap">{{ ai_queries.text }}</div>
+  {% elif ai_queries %}<p class="muted">Analisis tidak bisa dibuat: {{ ai_queries.error }}.</p>
+  {% else %}<p class="muted">Minta AI membaca pola query terberat dan index yang ada, lalu menyarankan index atau penulisan ulang.</p>{% endif %}
+  <p class="hint">{% if ai_queries %}{{ ai_queries.provider }} · {{ ai_queries.model }} · {{ ai_queries.created_at | tanggal }} · diminta {{ ai_queries.requested_by }}. {% endif %}Yang dikirim hanya pola query tanpa nilai, penghitung performance_schema, dan nama index. <b>EXPLAIN belum dijalankan</b>, jadi semua saran belum terverifikasi: uji dulu di database cadangan, dan ingat index memperlambat tulis. Tidak ada yang dijalankan di database. <button class="btn" hx-post="/containers/{{ view.name }}/ai/queries" hx-swap="none" hx-disabled-elt="this">{{ "Analisis lagi" if ai_queries else "Analisis query" }}</button></p>
+</section>
 {% endif %}
 <div class="section-title"><h2>Status backup</h2><a class="small" href="/containers/{{ view.name }}/backup">Backup &amp; log ›</a></div>
 {% set info = state.info %}{% set pending = info.get("pending") or {} %}{% set upload_error = info.get("upload_error") %}

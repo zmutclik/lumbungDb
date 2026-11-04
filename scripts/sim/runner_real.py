@@ -35,7 +35,7 @@ with open(identity, "w") as handle:
 recipient = [line.split()[-1] for line in keygen.splitlines() if "public key" in line][0]
 
 source = "runner-real-source"
-sh(f"docker rm -f {source} >/dev/null 2>&1 || true")
+sh(f"docker rm -f -v {source} >/dev/null 2>&1 || true")
 sh(f"docker run -d --name {source} -e MARIADB_ROOT_PASSWORD=pw {image} --log-bin=mysql-bin")
 try:
     for _ in range(120):
@@ -76,7 +76,7 @@ try:
     for number in (1, 2):
         add("binlog", encrypt("echo '-- binlog'", f"mysql-bin.00000{number}.gz.age"), binlog_no=number)
 finally:
-    sh(f"docker rm -f {source}")
+    sh(f"docker rm -f -v {source}")
 
 
 class Local:

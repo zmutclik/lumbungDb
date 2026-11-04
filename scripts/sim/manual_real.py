@@ -61,7 +61,7 @@ os.environ.update(env)
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, env=env, capture_output=True)
 
 # ---------- sumber: data, full, dua binlog, semua terenkripsi ----------
-sh(f"docker rm -f {SOURCE_C} {NEW} >/dev/null 2>&1; docker volume rm -f {NEW}-backup >/dev/null 2>&1; true")
+sh(f"docker rm -f -v {SOURCE_C} {NEW} >/dev/null 2>&1; docker volume rm -f {NEW}-backup >/dev/null 2>&1; true")
 sh(f"docker run -d --name {SOURCE_C} -e MARIADB_ROOT_PASSWORD=pw {image} --log-bin=mysql-bin --server-id=1")
 
 
@@ -102,7 +102,7 @@ encrypt(f"cat /var/lib/mysql/mysql-bin.{start_no:06d}", "binlog", f"mysql-bin.{s
 sql("insert into appdb.t select seq + 2000, 'b' from seq_1_to_25; update appdb.t set v='ubah' where id <= 10; flush binary logs")
 encrypt(f"cat /var/lib/mysql/mysql-bin.{start_no + 1:06d}", "binlog", f"mysql-bin.{start_no + 1:06d}.gz.age").update(binlog_no=start_no + 1)
 expected = sql("select count(*), sum(v='ubah') from appdb.t")
-sh(f"docker rm -f {SOURCE_C}")
+sh(f"docker rm -f -v {SOURCE_C}")
 
 # ---------- LumbungDB asli: data, NAS ok, sesi ----------
 sys.path.insert(0, os.getcwd())

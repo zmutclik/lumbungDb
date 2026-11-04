@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.models import AiExplanation, AiSummary
 from app.ai.scrub import scrub_line, scrub_log
-from app.ai.normalize import normalize_query
+from app.ai import queries
 from app.ai.providers import Provider, ProviderError, get_provider
 from app.backup_control.models import BackupRequest
 from app.containers.models import Heartbeat
@@ -37,18 +37,9 @@ def _number(value):
 
 
 async def _digests(db: AsyncSession, container: str) -> list[dict]:
-    """Pola query terberat dari heartbeat terakhir. Agen sudah mengirimnya tanpa literal; dinormalisasi lagi di sini
-    karena data dari agen tidak dipercaya."""
+    """Pola query terberat dari heartbeat terakhir, dengan sinyal aturan dan index tabelnya (app.ai.queries)."""
     info = await db.scalar(select(Heartbeat.info).where(Heartbeat.container == container)) or {}
-    items = []
-    for raw in ((info.get("metrics") or {}).get("digests") or [])[:5]:
-        if not isinstance(raw, dict) or not isinstance(raw.get("text"), str):
-            continue
-        items.append({
-            "database": str(raw.get("database") or "")[:64], "query": normalize_query(raw["text"]),
-            "count": _number(raw.get("count")), "seconds": round((_number(raw.get("total_ps")) or 0) / 1e12, 3),
-            "rows_examined": _number(raw.get("rows_examined"))})
-    return items
+    return queries.entries(info.get("metrics"))
 
 
 async def build_input(db: AsyncSession, report: Report) -> dict:
@@ -120,6 +111,17 @@ SYSTEM_EXPLAIN = (
     "Aturan: hanya pakai data di masukan dan katakan bila bukti kurang; jangan mengarang penyebab sebagai fakta; jangan "
     "pernah menyarankan mematikan atau mengabaikan alert; jangan meminta admin mengirim isi data."
 )
+SYSTEM_QUERIES = (
+    "Kamu membantu DBA rumah sakit menganalisis query lambat MariaDB. Masukanmu JSON berisi pola query terberat yang "
+    "nilainya sudah dibuang (diganti ?), sinyal yang dihitung aturan biasa dari penghitung performance_schema (pemindaian "
+    "penuh, join tanpa index, tabel sementara di disk, rasio baris diperiksa per baris dikirim), dan index yang sudah ada "
+    "pada tabel yang dipakai. Untuk tiap query yang bermasalah tulis dalam bahasa Indonesia: apa yang kemungkinan lambat, "
+    "kandidat index konkret (kolom dari WHERE, JOIN, ORDER BY di teks query, urutan kolom dengan alasannya) atau penulisan "
+    "ulang, dan risikonya (index memperlambat tulis dan memakai disk). Aturan: EXPLAIN belum dijalankan, jadi semua saran "
+    "belum terverifikasi dan harus dikatakan begitu; sarankan mengujinya dulu di database cadangan atau lingkungan uji; jangan "
+    "menyarankan index yang sudah ada; jangan mengarang nama kolom atau tabel di luar masukan; bila tidak ada query "
+    "bermasalah atau data kurang, katakan singkat; maksimal delapan butir."
+)
 FAILED_STATUS = ("Gagal", "Tidak selesai", "Ditolak")
 
 
@@ -179,6 +181,40 @@ async def explain_container(db: AsyncSession, client: httpx.AsyncClient, contain
     return row
 
 
-async def latest_explanation(db: AsyncSession, container: str) -> AiExplanation | None:
-    return await db.scalar(select(AiExplanation).where(AiExplanation.container == container)
+async def latest_explanation(db: AsyncSession, container: str, kind: str = "keadaan") -> AiExplanation | None:
+    return await db.scalar(select(AiExplanation).where(AiExplanation.container == container, AiExplanation.kind == kind)
                            .order_by(AiExplanation.id.desc()).limit(1))
+
+
+async def analyze_queries(db: AsyncSession, client: httpx.AsyncClient, container: str, actor: str,
+                          *, provider: Provider | None = None) -> AiExplanation | None:
+    """Analisis slow query atas pola query terberat. None bila AI mati. Tanpa EXPLAIN: lihat app.ai.queries."""
+    provider = provider or get_provider()
+    if provider is None:
+        return None
+    async with db.begin():
+        info = await db.scalar(select(Heartbeat.info).where(Heartbeat.container == container)) or {}
+        metrics = info.get("metrics") or {}
+        payload = {"container": container, "performance_schema_aktif": bool(metrics.get("performance_schema")),
+                   "query": queries.entries(metrics, limit=10)}
+    text, error = None, None
+    if not payload["query"]:
+        error = ("performance_schema nonaktif atau belum ada data query dari agen"
+                 if not payload["performance_schema_aktif"] else "belum ada pola query yang dilaporkan agen")
+    else:
+        try:
+            text = (await provider.complete(SYSTEM_QUERIES, json.dumps(payload, ensure_ascii=False, indent=1), client))[:MAX_TEXT] or None
+            if text is None:
+                error = "penyedia menjawab kosong"
+        except ProviderError as err:
+            error = str(err)[:500]
+        except Exception as err:
+            logger.exception("ai_provider_crashed")
+            error = f"kesalahan tak terduga: {type(err).__name__}"
+    async with db.begin():
+        row = AiExplanation(container=container, requested_by=actor, kind="query", provider=provider.name,
+                            model=provider.model, input=payload, text=text, error=error)
+        db.add(row)
+        await db.flush()
+        await db.refresh(row)
+    return row
