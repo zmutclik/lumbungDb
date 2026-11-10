@@ -4,7 +4,7 @@ import stat
 import pytest
 
 from app.agents.agents_file import (
-    AgentRegistry, AgentsFileError, AgentsFileWriteError, NameRejected, parse, project_name,
+    AgentRegistry, AgentsFileError, AgentsFileInvalid, AgentsFileWriteError, NameRejected, parse, project_name,
 )
 
 TOKEN = "t" * 16
@@ -83,6 +83,25 @@ def test_load_is_strict_but_running_reload_keeps_old_entries(tmp_path):
     assert registry.authenticate(TOKEN) == "a"
     with pytest.raises(AgentsFileError):
         registry.load()
+
+
+def test_changes_refused_when_file_invalid_at_runtime(tmp_path):
+    """Temuan audit: disable() dulu melaporkan berhasil padahal token yang dicabut tetap diterima."""
+    path = tmp_path / "agents.conf"
+    path.write_text(f"a = {TOKEN}\n")
+    registry = AgentRegistry(str(path))
+    registry.load()
+    broken = f"a = {TOKEN}\nbaris rusak\n"
+    path.write_text(broken)
+    for action in (lambda: registry.disable("a"), lambda: registry.remove_pending("a"), lambda: registry.add("b")):
+        with pytest.raises(AgentsFileInvalid, match="baris 2"):
+            action()
+    assert path.read_text() == broken                      # file tidak disentuh
+    assert isinstance(AgentsFileInvalid("x"), AgentsFileWriteError)
+
+    path.write_text(f"a = {TOKEN}\n")                     # setelah diperbaiki, pencabutan berlaku
+    assert registry.disable("a") is True
+    assert registry.authenticate(TOKEN) is None
 
 
 def test_missing_file_is_empty(tmp_path):

@@ -90,9 +90,9 @@ async def manual_register(request: Request, db: DbSession, x_restore_token: Toke
         done = await service.register(db, x_restore_token, x_machine_id, client_ip(request))
     except service.RestoreError as err:
         return _text(err)
-    except AgentsFileWriteError:
-        return PlainTextResponse("config/agents.conf tidak bisa ditulis di LumbungDB. Perbaiki izinnya, lalu jalankan "
-                                 "perintah yang sama lagi; database di server ini tidak dipulihkan ulang.\n", status_code=500)
+    except AgentsFileWriteError as err:
+        return PlainTextResponse(f"LumbungDB: {err} Lalu jalankan perintah yang sama lagi; database di server ini "
+                                 "tidak dipulihkan ulang.\n", status_code=500)
     except NameRejected as err:
         return PlainTextResponse(f"{err}\n", status_code=409)
     return PlainTextResponse(f"LUMBUNG_TOKEN={done.token}\nLUMBUNG_AGE_RECIPIENTS={done.age_recipients}\n")

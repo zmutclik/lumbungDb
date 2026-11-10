@@ -32,7 +32,7 @@ from app.runners.dependencies import registry as runner_registry
 from app.containers.models import Heartbeat
 from app.runners.models import RunnerHeartbeat
 from app.backup_control import cron as cron_lib
-from app.agents.agents_file import AgentsFileWriteError, NameRejected, project_name
+from app.agents.agents_file import AgentsFileInvalid, AgentsFileWriteError, NameRejected, project_name
 from app.agents.dependencies import registry
 
 # Semua akun LumbungDB punya hak yang sama, yaitu admin.
@@ -64,6 +64,11 @@ def _find(base: dict, name: str):
     if found is None:
         raise HTTPException(status_code=404, detail=f"Container {name} tidak ada.")
     return found
+
+
+def _file_status(err: AgentsFileWriteError) -> int:
+    """File rusak adalah keadaan yang harus diperbaiki admin, jadi pesannya ditampilkan (5xx disembunyikan)."""
+    return 409 if isinstance(err, AgentsFileInvalid) else 500
 
 
 def _control_error(err: control.ControlError) -> HTTPException:
@@ -183,9 +188,9 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
             token, install_token, expires_at = await install_service.register(db, name, port, user.username)
         except NameRejected as err:
             error = str(err)
-        except AgentsFileWriteError:
+        except AgentsFileWriteError as err:
             # Token belum dibuat dan daftar agen tidak berubah
-            error = "Tidak bisa menulis config/agents.conf. Container belum didaftarkan; perbaiki izin file."
+            error = f"{err} Container belum didaftarkan."
     if error:
         return templates.TemplateResponse(
             request=request, name="dashboard/_wizard_name.html",
@@ -223,7 +228,7 @@ async def cancel_pending(name: str, db: DbSession):
     except container_service.AlreadyConnected as err:
         raise HTTPException(status_code=409, detail="Agen sudah pernah mengirim heartbeat.") from err
     except AgentsFileWriteError as err:
-        raise HTTPException(status_code=500) from err
+        raise HTTPException(status_code=_file_status(err), detail=f"{err} Pendaftaran belum dibatalkan.") from err
     if not found:
         raise HTTPException(status_code=404)
     return Response(status_code=200, headers={"HX-Redirect": "/containers"})
@@ -328,7 +333,7 @@ async def disable_container(name: str, user: CurrentUserDep, db: DbSession):
     try:
         await control.disable_container(db, name, user.username)
     except AgentsFileWriteError as err:
-        raise HTTPException(status_code=500) from err
+        raise HTTPException(status_code=_file_status(err), detail=f"{err} Agen belum dinonaktifkan.") from err
     except control.ControlError as err:
         raise _control_error(err) from err
     return _done(f"{name} dinonaktifkan. File di NAS tidak dihapus.")
@@ -600,8 +605,8 @@ async def standby_promote(name: str, request: Request, user: CurrentUserDep, db:
             await promote_service.create(db, name, new_name, int(raw_port), user.username)
         except NameRejected as err:
             error = str(err)
-        except AgentsFileWriteError:
-            error = "Tidak bisa menulis config/agents.conf. Tidak ada yang berubah; perbaiki izin file."
+        except AgentsFileWriteError as err:
+            error = f"{err} Tidak ada yang berubah."
         except runner_service.RunnerError as err:
             error = err.detail
     if error:

@@ -28,7 +28,12 @@ class AgentsFileError(Exception):
 
 
 class AgentsFileWriteError(Exception):
-    """File tidak bisa ditulis; daftar agen tidak berubah."""
+    """File tidak bisa diubah; daftar agen tidak berubah. Teksnya untuk ditampilkan ke admin."""
+
+
+class AgentsFileInvalid(AgentsFileWriteError):
+    """Isi file sudah tidak valid sebelum diubah (biasanya diedit manual). Perubahan ditolak, bukan dilaporkan
+    berhasil: proses yang berjalan masih memakai daftar lama, jadi token yang dicabut akan tetap diterima."""
 
 
 class NameRejected(ValueError):
@@ -139,7 +144,17 @@ class AgentRegistry:
                     mode = self.path.stat().st_mode & 0o777
                 except FileNotFoundError:
                     current, mode = "", 0o600
+                try:
+                    parse(current, self.label)
+                except AgentsFileError as err:
+                    raise AgentsFileInvalid(
+                        f"config/{self.label} tidak bisa dibaca ({err}). Perbaiki file itu dulu."
+                    ) from err
                 new_text = change(current)
+                try:
+                    parse(new_text, self.label)
+                except AgentsFileError as err:   # pengaman: perubahan tidak boleh menghasilkan file rusak
+                    raise AgentsFileInvalid(f"Perubahan config/{self.label} ditolak ({err}).") from err
                 fd, tmp = tempfile.mkstemp(dir=directory, prefix=".agents-")
                 try:
                     with os.fdopen(fd, "w") as handle:
@@ -153,7 +168,8 @@ class AgentRegistry:
                         os.unlink(tmp)
                     raise
         except OSError as err:
-            raise AgentsFileWriteError(str(err)) from err
+            logger.exception("agents_file_write_failed")
+            raise AgentsFileWriteError(f"Tidak bisa menulis config/{self.label}; perbaiki izin file.") from err
         self._read(strict=False)
 
     def name_error(self, name: str, entries: AgentEntries | None = None) -> str | None:

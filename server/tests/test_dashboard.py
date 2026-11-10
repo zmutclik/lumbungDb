@@ -138,6 +138,26 @@ async def test_disable_keeps_history_and_blocks_agent(client, csrf):
     assert "lama-db" not in json.dumps((await client.get("/api/status")).json()["alerts"])
 
 
+async def test_disable_refused_when_agents_conf_invalid(client, csrf):
+    await client.post("/containers", data={"name": "rusak-db"}, headers=post_headers(csrf))
+    token = registry.entries().active["rusak-db"]
+    agent = {"X-Token": token}
+    await beat(client, agent)
+    path = Path(settings.AGENTS_FILE)
+    original = path.read_text()
+    path.write_text(original + "baris rusak\n")
+    try:
+        resp = await client.post("/containers/rusak-db/disable", headers=post_headers(csrf))
+        assert resp.status_code == 409
+        assert "tidak bisa dibaca" in resp.text and "belum dinonaktifkan" in resp.text
+        assert "show-toast" not in resp.headers.get("hx-trigger", "")
+        assert path.read_text().endswith("baris rusak\n")
+    finally:
+        path.write_text(original)
+    assert (await client.post("/containers/rusak-db/disable", headers=post_headers(csrf))).status_code == 200
+    assert (await client.post("/api/heartbeat", json={}, headers=agent)).status_code == 401
+
+
 async def test_detail_pages_after_activity(client, csrf):
     token = registry.add("siak-db")
     agent = {"X-Token": token}

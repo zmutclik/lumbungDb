@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from app.agents.agents_file import AgentsFileWriteError, NameRejected
+from app.agents.agents_file import AgentsFileInvalid, AgentsFileWriteError, NameRejected
 from app.alerts import service as alert_service
 from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, require_role
 from app.core.database import DbSession
@@ -52,8 +52,8 @@ async def create_runner(request: Request, user: CurrentUserDep):
             token = runners.add(name)
         except NameRejected as err:
             error = str(err)
-        except AgentsFileWriteError:
-            error = "Tidak bisa menulis config/runners.conf. Runner belum didaftarkan; perbaiki izin file."
+        except AgentsFileWriteError as err:
+            error = f"{err} Runner belum didaftarkan."
     if error:
         return templates.TemplateResponse(
             request=request, name="runners/_new_dialog.html", context={"name": name, "error": error},
@@ -76,5 +76,6 @@ async def disable_runner(name: str, user: CurrentUserDep):
     try:
         runners.disable(name)
     except AgentsFileWriteError as err:
-        raise HTTPException(status_code=500, detail="Tidak bisa menulis config/runners.conf.") from err
+        status = 409 if isinstance(err, AgentsFileInvalid) else 500   # 5xx tidak menampilkan pesan
+        raise HTTPException(status_code=status, detail=f"{err} Runner belum dinonaktifkan.") from err
     return _done(f"Runner {name} dinonaktifkan.")
