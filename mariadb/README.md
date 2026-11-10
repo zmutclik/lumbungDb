@@ -130,6 +130,12 @@ docker exec <container> /opt/backup/binlogbackup.sh
 
 ## Restore
 
+Contoh di bawah memakai file di `/backup` container, yang tidak terenkripsi. File yang diambil dari NAS berakhiran `.gz.age` dan harus dibuka dulu dengan salah satu kunci privat, lalu dipakai seperti biasa:
+
+```bash
+age --decrypt --identity age-pemulihan.key -o <waktu>.xbstream.gz <waktu>.xbstream.gz.age
+```
+
 ### Dari dump (satu database)
 
 Dump berisi `CREATE DATABASE`, tabel, data, trigger, routine, dan event. Database dengan nama yang sama akan ditimpa.
@@ -222,7 +228,7 @@ Jika data volume lama masih bisa dibaca, binlog terbaru (yang belum sempat diars
 Ubah `BACKUP_PASS` di `.env`, lalu samakan di database dan buat ulang container:
 
 ```bash
-docker exec -it <container> sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -e "ALTER USER '\''user_backup'\''@'\''localhost'\'' IDENTIFIED BY '\''<password_baru>'\''"'
+docker exec -it <container> sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -e "ALTER USER '\''$BACKUP_USER'\''@'\''localhost'\'' IDENTIFIED BY '\''<password_baru>'\''"'
 docker compose up -d
 ```
 
@@ -245,3 +251,16 @@ MARIADB_VERSION=11.8 ./build-image.sh   # versi lain
 `scripts/openssl.cnf` mengatur TLS minimal 1.2 dengan `CipherString = DEFAULT@SECLEVEL=1`.
 `SECLEVEL=1` mengizinkan kunci dan cipher yang lebih lemah agar client lama tetap bisa terhubung.
 Jika semua client sudah modern, ganti ke `SECLEVEL=2` untuk keamanan yang lebih baik.
+
+## User metrik (tahap 3)
+
+Agen membaca metrik kesehatan lewat user DB `lumbung` (unix_socket, tanpa password, tanpa hak baca isi tabel).
+Volume baru membuatnya otomatis lewat `init-backup-user.sh`. Volume yang sudah ada menjalankan SQL ini sekali sebagai root:
+
+```sql
+CREATE USER IF NOT EXISTS 'lumbung'@'localhost' IDENTIFIED VIA unix_socket;
+GRANT SHOW VIEW ON *.* TO 'lumbung'@'localhost';
+GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'lumbung'@'localhost';
+```
+
+Tanpa user ini heartbeat tetap berjalan, hanya tanpa metrik. Daftar query terberat hanya ada bila `performance_schema=ON`.

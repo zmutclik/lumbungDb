@@ -1,0 +1,42 @@
+{% import "dashboard/_macros.html" as ui %}
+<div>
+<div class="page-head"><div>
+  <h1>Laporan {{ "harian" if report.kind == "daily" else "mingguan" }} {{ report.period_start | tanggal_saja }}</h1>
+  <div class="sub">Diterbitkan {{ report.created_at | tanggal }}. {{ report.data.checked }} container diperiksa.
+    <a href="/reports?jenis={{ report.kind }}">Semua laporan</a></div>
+</div></div>
+{% if ai %}
+<section class="card card-pad" id="ai-summary">
+  <h2>Ringkasan AI <span class="pill pill-wait">dibuat AI</span></h2>
+  {% if ai.text %}<div style="white-space: pre-wrap">{{ ai.text }}</div>{% else %}<p class="muted">Ringkasan AI gagal dibuat: {{ ai.error }}. Laporan angka di bawah tidak terpengaruh.</p>{% endif %}
+  <p class="hint">{{ ai.provider }} · {{ ai.model }} · {{ ai.created_at | tanggal }}. AI hanya menafsirkan angka dan temuan di laporan ini; tidak mengubah atau menekan alert, dan bisa keliru. Masukan persis yang dikirim tersimpan untuk audit. <button class="btn" hx-post="/reports/{{ report.id }}/ai" hx-swap="none">{{ "Buat ulang" if ai.text else "Coba lagi" }}</button></p>
+</section>
+{% elif ai_enabled %}
+<div class="banner banner-info">Ringkasan AI belum dibuat untuk laporan ini. <button class="btn" hx-post="/reports/{{ report.id }}/ai" hx-swap="none">Buat sekarang</button></div>
+{% endif %}
+{% for section in report.data.containers %}
+{% set stats = section.stats %}
+<section class="card">
+  <h2><a href="/containers/{{ section.name }}">{{ section.name }}</a></h2>
+  {% if section.findings %}
+  <ul>{% for finding in section.findings %}<li class="{{ 'bad' if finding.level == 'bad' else 'warn' }}">{{ finding.text }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">Tidak ada masalah.</p>{% endif %}
+  {% if report.kind == "weekly" %}
+  <dl class="kv">
+    {% if stats.connections_peak is not none %}<dt>Koneksi puncak</dt><dd>{{ stats.connections_peak | int }} dari {{ (stats.max_connections or 0) | int }}</dd>{% endif %}
+    {% if stats.hit_ratio is not none %}<dt>Hit ratio buffer pool</dt><dd>{{ "%.1f" | format(stats.hit_ratio) }}%</dd>{% endif %}
+    {% if stats.slow_queries is not none %}<dt>Slow query</dt><dd>{{ stats.slow_queries | int }}</dd>{% endif %}
+    {% if stats.disk_free is not none %}<dt>Ruang bebas /backup</dt><dd>{{ stats.disk_free | int | filesize }}{% if stats.disk_full_days is not none %}, penuh sekitar {{ stats.disk_full_days | int }} hari lagi{% endif %}</dd>{% endif %}
+    {% if stats.full_size is not none %}<dt>Full terakhir</dt><dd>{{ stats.full_size | filesize }}</dd>{% endif %}
+  </dl>
+  {% if stats.growth %}
+  <div class="tbl-wrap"><table class="t"><thead><tr><th>Database</th><th>Ukuran</th><th>Pertumbuhan</th></tr></thead><tbody>
+  {% for g in stats.growth[:10] %}<tr><td>{{ g.database }}</td><td>{{ g.bytes | int | filesize }}</td><td>{{ g.delta | int | filesize }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% endif %}
+  {% endif %}
+</section>
+{% else %}
+<div class="empty"><b>Tidak ada masalah</b>Semua container sehat pada periode ini.</div>
+{% endfor %}
+</div>

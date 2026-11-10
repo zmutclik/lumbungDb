@@ -13,7 +13,7 @@ from app.core.database import async_session_factory
 from app.nas.monitor import ProbeResult
 from app.nas.service import save_result
 from app.agents.dependencies import registry
-from tests.conftest import login, make_user
+from tests.conftest import AGE, login, make_user
 from tests.test_control import beat
 
 
@@ -138,13 +138,33 @@ async def test_disable_keeps_history_and_blocks_agent(client, csrf):
     assert "lama-db" not in json.dumps((await client.get("/api/status")).json()["alerts"])
 
 
+async def test_disable_refused_when_agents_conf_invalid(client, csrf):
+    await client.post("/containers", data={"name": "rusak-db"}, headers=post_headers(csrf))
+    token = registry.entries().active["rusak-db"]
+    agent = {"X-Token": token}
+    await beat(client, agent)
+    path = Path(settings.AGENTS_FILE)
+    original = path.read_text()
+    path.write_text(original + "baris rusak\n")
+    try:
+        resp = await client.post("/containers/rusak-db/disable", headers=post_headers(csrf))
+        assert resp.status_code == 409
+        assert "tidak bisa dibaca" in resp.text and "belum dinonaktifkan" in resp.text
+        assert "show-toast" not in resp.headers.get("hx-trigger", "")
+        assert path.read_text().endswith("baris rusak\n")
+    finally:
+        path.write_text(original)
+    assert (await client.post("/containers/rusak-db/disable", headers=post_headers(csrf))).status_code == 200
+    assert (await client.post("/api/heartbeat", json={}, headers=agent)).status_code == 401
+
+
 async def test_detail_pages_after_activity(client, csrf):
     token = registry.add("siak-db")
     agent = {"X-Token": token}
     await beat(client, agent)
-    await client.put("/api/upload/databases/siakdb/siakdb-20261101_030000.sql.gz", content=b"a", headers=agent)
-    await client.put("/api/upload/databases/siakdb/siakdb-20261101_030000.sql.gz", content=b"b", headers=agent)
-    await client.put("/api/upload/fullbackup/20261101_020000.xbstream.gz", content=b"f", headers=agent)
+    await client.put("/api/upload/databases/siakdb/siakdb-20261101_030000.sql.gz.age", content=AGE + b"a", headers=agent)
+    await client.put("/api/upload/databases/siakdb/siakdb-20261101_030000.sql.gz.age", content=AGE + b"b", headers=agent)
+    await client.put("/api/upload/fullbackup/20261101_020000.xbstream.gz.age", content=AGE + b"f", headers=agent)
     await client.post("/containers/siak-db/requests", data={"what": "dump:siakdb"}, headers=post_headers(csrf))
     for path in ("/containers/siak-db", "/containers/siak-db/backup", "/containers/siak-db/backup?kind=databases&q=siak",
                  "/containers/siak-db/backup?day=2026-11-01", "/dashboard?hari=30", "/containers"):
@@ -152,14 +172,14 @@ async def test_detail_pages_after_activity(client, csrf):
         assert resp.status_code == 200, f"{path}: {resp.text[:300]}"
     page = (await client.get("/containers/siak-db/backup")).text
     assert "Checksum berbeda" in page and "Tandai sudah ditinjau" in page
-    assert "Dump siakdb" in page and "20261101_020000.xbstream.gz" in page
+    assert "Dump siakdb" in page and "20261101_020000.xbstream.gz.age" in page
 
 
 async def test_integrity_review_clears_alert(client, csrf):
     agent = {"X-Token": registry.add("siak-db")}
-    url = "/api/upload/fullbackup/20261101_020000.xbstream.gz"
-    await client.put(url, content=b"a", headers=agent)
-    await client.put(url, content=b"b", headers=agent)
+    url = "/api/upload/fullbackup/20261101_020000.xbstream.gz.age"
+    await client.put(url, content=AGE + b"a", headers=agent)
+    await client.put(url, content=AGE + b"b", headers=agent)
     status = (await client.get("/api/status")).json()
     assert any(alert["key"].startswith("integrity:") for alert in status["alerts"])
     key = next(a["key"] for a in status["alerts"] if a["key"].startswith("integrity:"))
@@ -303,10 +323,10 @@ async def test_watchdog_public_and_reports_stale_checker(client):
 
 async def test_filter_returns_only_rows(client, csrf):
     agent = {"X-Token": registry.add("siak-db")}
-    await client.put("/api/upload/fullbackup/a.gz", content=b"a", headers=agent)
+    await client.put("/api/upload/fullbackup/a.gz.age", content=AGE + b"a", headers=agent)
     resp = await client.get("/containers/siak-db/backup?kind=binlog",
                             headers={"HX-Request": "true", "HX-Target": "file-rows"})
-    assert "<html" not in resp.text and 'id="live"' not in resp.text and "a.gz" not in resp.text
+    assert "<html" not in resp.text and 'id="live"' not in resp.text and "a.gz.age" not in resp.text
 
 
 async def test_status_pill_uses_short_label(client, csrf):
@@ -314,8 +334,8 @@ async def test_status_pill_uses_short_label(client, csrf):
     await beat(client, agent)
     page = await client.get("/containers")
     assert "Belum ada backup" in page.text
-    await client.put("/api/upload/fullbackup/a.gz", content=b"a", headers=agent)
-    await client.put("/api/upload/fullbackup/a.gz", content=b"b", headers=agent)
+    await client.put("/api/upload/fullbackup/a.gz.age", content=AGE + b"a", headers=agent)
+    await client.put("/api/upload/fullbackup/a.gz.age", content=AGE + b"b", headers=agent)
     page = await client.get("/containers")
     assert "Checksum berbeda" in page.text and "siak-db: " not in page.text
 
@@ -342,12 +362,12 @@ async def test_install_command_flow(client, csrf):
     assert "LUMBUNG_URL=http://test INSTALL_TOKEN=" in resp.text
     assert install_token != agent_token
 
-    # Tanpa login dan tanpa CSRF: yang melindungi adalah token. Isi .env tidak berisi password.
+    # Tanpa login dan tanpa CSRF: yang melindungi adalah token. Isi .env tidak berisi user dan password.
     claimed = await _claim(client, install_token)
     assert claimed.status_code == 200, claimed.text
     assert claimed.headers["content-type"].startswith("text/plain")
     for line in (f"LUMBUNG_TOKEN={agent_token}", "COMPOSE_PROJECT_NAME=radiologi-db", "DATA_PORT=3307",
-                 "DB_NAME=radiologi", "DB_APPUSER=radiologi_app", "DB_ROOTPASSWORD=", "BACKUP_PASS="):
+                 "DB_NAME=radiologi", "DB_ROOTPASSWORD=", "DB_APPUSER=", "DB_APPPASS=", "BACKUP_USER=", "BACKUP_PASS="):
         assert line in claimed.text.splitlines(), line
 
     assert (await _claim(client, install_token)).status_code == 200   # jalankan ulang di mesin yang sama

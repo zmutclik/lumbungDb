@@ -14,6 +14,7 @@ from app.containers.service import ensure_row
 from app.core.config import settings
 
 PAGE_SIZE = 30
+AGE_MAGIC = b"age-encryption.org/v1\n"   # penerima menolak file yang tidak terenkripsi
 # Total dibagi rata per proses web. Upload yang tersangkut hanya memakai jatah ini, tidak menghabiskan worker dashboard.
 PROCESS_SLOTS = max(1, -(-settings.UPLOAD_MAX_CONCURRENT // max(1, settings.WEB_CONCURRENCY)))
 _fs_limiter = anyio.CapacityLimiter(PROCESS_SLOTS)
@@ -39,27 +40,36 @@ async def _fs(function, *args):
 async def receive_upload(
     db: AsyncSession, container: str, path: naming.UploadPath, stream: AsyncIterable[bytes], *,
     expected_sha256: str | None, mtime_header: str | None, request_id: int | None, binlog_start: str | None,
+    plain_sha256: str | None = None,
 ) -> UploadResult:
     """Stream ke .part → fsync → cek checksum → nama akhir → metadata. Tanpa transaksi terbuka selama I/O NAS."""
     part = await _fs(storage.open_part, container, path.kind, path.relpath)
     try:
+        head = b""
         async for chunk in stream:
             if chunk:
+                if len(head) < len(AGE_MAGIC):
+                    head += chunk[:len(AGE_MAGIC) - len(head)]
+                    if not AGE_MAGIC.startswith(head):
+                        raise UploadRejected(422, "File tidak terenkripsi.")
                 await _fs(storage.write_chunk, part, chunk)
         sha256 = await _fs(storage.finish_part, part)
         if part.size == 0:
             raise UploadRejected(422, "File kosong.")
+        if head != AGE_MAGIC:
+            raise UploadRejected(422, "File tidak terenkripsi.")
         if expected_sha256 and expected_sha256.lower() != sha256:
             raise UploadRejected(422, "Checksum tidak cocok.")
 
         async with db.begin():
             now = await db.scalar(select(func.now()))
             existing = list((await db.execute(
-                select(Backup.id, Backup.sha256, Backup.chain_id).where(
+                select(Backup.id, Backup.plain_sha256, Backup.chain_id).where(
                     Backup.container == container, Backup.kind == path.kind, Backup.relpath == path.relpath,
                 ).order_by(Backup.id)
             )).all())
-        if any(row.sha256 == sha256 for row in existing):
+        version_key = plain_sha256 or sha256
+        if any(row.plain_sha256 == version_key for row in existing):
             await _fs(storage.discard_part, part)
             return UploadResult("exists", None)
 
@@ -79,7 +89,7 @@ async def receive_upload(
             await db.execute(select(Container.name).where(Container.name == container).with_for_update())
             row = Backup(
                 container=container, kind=path.kind, database=path.database, relpath=path.relpath,
-                stored_path=stored_path, size=part.size, sha256=sha256, backup_at=backup_at, request_id=request_id,
+                stored_path=stored_path, size=part.size, sha256=sha256, plain_sha256=version_key, backup_at=backup_at, request_id=request_id,
                 binlog_no=path.binlog_no, binlog_start=binlog_start if path.kind == "fullbackup" else None,
             )
             db.add(row)

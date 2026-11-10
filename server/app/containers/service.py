@@ -26,7 +26,7 @@ async def known_names(db: AsyncSession) -> set[str]:
         return set(await db.scalars(select(Container.name)))
 
 
-async def register(db: AsyncSession, name: str) -> str:
+async def register(db: AsyncSession, name: str, origin: str = "dashboard", source: str | None = None) -> str:
     """Menulis baris ke agents.conf lalu mencatat container. Nama dari riwayat yang barisnya sudah dihapus tetap
     dianggap terpakai, karena folder NAS-nya masih ada."""
     taken = await known_names(db)
@@ -35,7 +35,7 @@ async def register(db: AsyncSession, name: str) -> str:
     token = registry.add(name, extra_names=frozenset(taken))
     try:
         async with db.begin():
-            db.add(Container(name=name, origin="dashboard"))
+            db.add(Container(name=name, origin=origin, source_container=source))
     except Exception:
         registry.remove_pending(name)   # token tidak pernah ditampilkan, jadi baris tidak boleh tertinggal
         raise
@@ -61,3 +61,7 @@ async def cancel_pending(db: AsyncSession, name: str) -> bool:
         await db.execute(delete(ControlLog).where(ControlLog.container == name))   # hanya catatan perintah pasang
         await db.execute(delete(Container).where(Container.name == name))
     return True
+
+
+async def machine_id(db: AsyncSession, name: str) -> str | None:
+    return await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == name))

@@ -1,3 +1,4 @@
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -10,6 +11,7 @@ from app.agents.dependencies import AgentName
 
 router = APIRouter(prefix="/api", tags=["backups"])
 
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _active_uploads = 0   # per proses web: jatah dibagi rata, lihat service.PROCESS_SLOTS
 
 
@@ -17,6 +19,7 @@ _active_uploads = 0   # per proses web: jatah dibagi rata, lihat service.PROCESS
 async def upload(
     kind: str, relpath: str, request: Request, container: AgentName, db: DbSession,
     x_sha256: Annotated[str | None, Header()] = None,
+    x_plain_sha256: Annotated[str | None, Header()] = None,
     x_file_mtime: Annotated[str | None, Header()] = None,
     x_backup_request: Annotated[str | None, Header()] = None,
     x_binlog_start: Annotated[str | None, Header()] = None,
@@ -26,6 +29,8 @@ async def upload(
         path = naming.parse_upload_path(kind, relpath)
     except naming.InvalidPath as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
+    if x_plain_sha256 is not None and not _SHA256.fullmatch(x_plain_sha256):
+        raise HTTPException(status_code=400, detail="X-Plain-SHA256 tidak valid.")
 
     async with db.begin():
         nas = await nas_service.get_view(db)
@@ -43,7 +48,7 @@ async def upload(
     try:
         result = await service.receive_upload(
             db, container, path, request.stream(),
-            expected_sha256=x_sha256, mtime_header=x_file_mtime, request_id=request_id,
+            expected_sha256=x_sha256, plain_sha256=x_plain_sha256, mtime_header=x_file_mtime, request_id=request_id,
             binlog_start=naming.valid_binlog_start(x_binlog_start),
         )
     except service.UploadRejected as err:

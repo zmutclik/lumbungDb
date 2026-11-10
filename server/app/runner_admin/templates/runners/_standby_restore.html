@@ -1,0 +1,10 @@
+<form hx-post="/containers/{{ name }}/cadangan/restore">
+  <h3>Restore sekarang: {{ name }}</h3>
+  <ul><li>Memulihkan seluruh container ke database cadangan di runner, memakai full terbaru yang tidak gagal uji, lalu menerapkan binlog sampai data terbaru.</li>
+  <li>Tidak pernah menyentuh database produksi. Bila gagal, database cadangan lama tetap dipakai.</li></ul>
+  <div class="field"><label for="rs-runner">Restore di</label>
+    <select id="rs-runner" name="runner" required>
+      {% for r in runner_names %}<option value="{{ r }}"{% if r == current %} selected{% endif %}>{{ r }}{% if r == current %} (runner cadangan saat ini){% endif %}</option>{% else %}<option value="">Belum ada runner</option>{% endfor %}</select>
+    <div class="hint">Memilih runner lain memindahkan database cadangan ke sana setelah restore lolos.</div></div>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Mulai restore</button></div>
+</form>

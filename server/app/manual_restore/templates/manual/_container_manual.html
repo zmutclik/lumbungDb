@@ -1,0 +1,24 @@
+{% import "dashboard/_macros.html" as ui %}
+{% set state = view.state %}
+<div {{ ui.live(request) }}>
+{% include "dashboard/_container_head.html" %}
+<div class="card card-pad">
+  <div class="page-head"><div><h2>Restore manual</h2></div>
+  <div class="actions"><button class="btn btn-pri" hx-get="/containers/{{ view.name }}/restore-manual/new" hx-target="#modal" hx-swap="innerHTML">Buat sesi restore</button></div></div>
+  <p class="hint">Memulihkan seluruh container ke server mana pun dengan satu perintah <code>curl</code>, tanpa runner. Jalur untuk kejadian saat Naikkan ke production tidak bisa dipakai: tidak ada runner, database cadangan belum disiapkan, atau production perlu dipulihkan di server baru. Butuh LumbungDB yang hidup; bila LumbungDB mati, atau perlu pemulihan ke waktu tertentu, satu database, atau akun <code>_users</code>, pakai file di NAS mengikuti README image.</p>
+</div>
+<h2 class="section">Sesi</h2>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Dibuat</th><th>Container baru</th><th>Status</th><th>Langkah</th><th>Berlaku sampai</th><th></th></tr></thead><tbody>
+{% for s in sessions %}
+<tr><td>{{ s.created_at | tanggal }}<div class="muted small">{{ s.created_by }}</div></td>
+  <td>{{ s.new_name }} <span class="muted small">port {{ s.port }}</span>{% if s.binlog == "none" %}<div class="muted small">full saja</div>{% endif %}
+    {% if s.same_server %}<div class="muted small"><span class="pill pill-warn">Server tujuan sama dengan server sumber</span></div>{% endif %}</td>
+  <td><span class="pill pill-{{ 'ok' if s.status == 'Selesai' else 'bad' if s.status == 'Gagal' else 'wait' if s.status in ('Aktif', 'Berjalan') else 'off' }}">{{ s.status }}</span>{% if s.live and not s.bound %}<div class="muted small">menunggu dijalankan</div>{% endif %}</td>
+  <td class="small">{{ s.note if s.status == 'Gagal' and s.note else (s.step or "") }}</td>
+  <td>{{ s.expires_at | tanggal }}</td>
+  <td class="actions">{% if s.live %}{% if s.extendable %}<button class="btn" hx-post="/restore-manual/{{ s.id }}/extend" hx-swap="none">+2 jam</button> {% endif %}<button class="btn btn-danger" hx-post="/restore-manual/{{ s.id }}/revoke" hx-swap="none" hx-confirm="Cabut sesi {{ s.new_name }}? Token langsung tidak berlaku.">Cabut</button>{% endif %}</td></tr>
+{% else %}
+<tr><td colspan="6"><div class="empty"><b>Belum ada sesi</b>Buat sesi untuk mendapat perintah restore.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+</div>

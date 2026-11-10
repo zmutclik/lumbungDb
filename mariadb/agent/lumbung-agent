@@ -1,5 +1,5 @@
 #!/bin/sh
 # Menjalankan agen secara manual, mis. saat MariaDB gagal start:
-#   docker run --rm --entrypoint lumbung-agent -e LUMBUNG_URL=... -e LUMBUNG_TOKEN=... \
+#   docker run --rm --entrypoint lumbung-agent -e LUMBUNG_URL=... -e LUMBUNG_TOKEN=... -e LUMBUNG_AGE_RECIPIENTS=... \
 #     -v <volume-backup>:/backup:ro zmutclik/mariadb:lumbungdb-<tag> --drain
 exec python3 -I /opt/lumbung/agent.py "$@"

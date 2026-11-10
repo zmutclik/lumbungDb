@@ -6,5 +6,16 @@
 <div class="tbl-wrap"><table class="t"><thead><tr><th>Variabel</th><th>Nilai</th></tr></thead><tbody>
 {% for name, value in rows %}<tr><td><code>{{ name }}</code></td><td>{{ value }}</td></tr>{% endfor %}
 </tbody></table></div>
+<h2 class="section">Pindai ulang NAS</h2>
+<div class="card card-pad">
+  <p class="small">Membangun lagi metadata backup dari file yang ada di NAS, bila database LumbungDB hilang. File di NAS tidak diubah. Checksum isi (sebelum enkripsi) dan posisi awal binlog full tidak bisa dibaca dari file, jadi kiriman ulang dari agen tercatat sebagai versi baru.</p>
+  <button class="btn" hx-post="/settings/rescan" hx-confirm="Pindai seluruh NAS? Ini membaca semua file dan bisa lama.">Pindai ulang</button>
+</div>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Diminta</th><th>Oleh</th><th>Status</th><th>Dibaca</th><th>Ditambah</th><th>Dilewati</th><th>Keterangan</th></tr></thead><tbody>
+{% for scan in scans %}<tr><td>{{ scan.created_at | tanggal }}</td><td>{{ scan.requested_by }}</td>
+<td><span class="pill pill-{{ 'ok' if scan.status == 'Selesai' else 'bad' if scan.status == 'Gagal' else 'wait' }}">{{ scan.status }}</span></td>
+<td>{{ scan.seen }}</td><td>{{ scan.added }}</td><td>{{ scan.skipped }}</td><td class="small">{{ scan.note or "" }}</td></tr>
+{% else %}<tr><td colspan="7"><div class="empty"><b>Belum pernah dipindai</b></div></td></tr>{% endfor %}
+</tbody></table></div>
 <p class="small muted mt-s">Bila NFS belum ter-mount, file penanda tidak ditemukan: container tetap berjalan, upload ditolak (503), agen mengulang otomatis, dan alert dikirim. Bila NAS macet, pemeriksaan berhenti di batas {{ probe_timeout }} detik dan hasilnya sama. Status terakhir juga ada di <code>/api/watchdog</code>.</p>
 </div>

@@ -175,6 +175,18 @@ def test_short_secret_key_rejected():
             Settings(_env_file=None, DATABASE_URL="mysql+asyncmy://u:p@h/db", SECRET_KEY=weak)
 
 
+@pytest.mark.parametrize("recipients", ["", "kunci-salah", "age1" + "q" * 58 + ", age1" + "q" * 58, "AGE-SECRET-KEY-1" + "Q" * 58])
+def test_invalid_backup_recipients_rejected(recipients):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, DATABASE_URL="mysql+asyncmy://u:p@h/db", SECRET_KEY="x" * 32, BACKUP_AGE_RECIPIENTS=recipients)
+
+
+def test_two_backup_recipients_accepted():
+    value = "age1" + "q" * 58 + ",age1" + "p" * 58
+    assert Settings(_env_file=None, DATABASE_URL="mysql+asyncmy://u:p@h/db", SECRET_KEY="x" * 32,
+                    BACKUP_AGE_RECIPIENTS=value).BACKUP_AGE_RECIPIENTS == value
+
+
 @pytest.fixture
 def cached_route():
     async def cached():

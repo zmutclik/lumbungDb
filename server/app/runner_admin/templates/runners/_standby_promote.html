@@ -1,0 +1,16 @@
+<form id="promote-form" hx-post="/containers/{{ name }}/cadangan/promote">
+  <h3>Naikkan ke production: {{ name }}</h3>
+  {% if error %}<div class="banner banner-bad" role="alert">{{ error }}</div>{% endif %}
+  <ul>
+    <li>Database cadangan di runner <b>{{ standby.runner }}</b> menjadi container production baru di mesin itu. Data sampai {% if standby.data_until %}<b>{{ standby.data_until | tanggal }}</b>{% else %}—{% endif %}; selisih sesudahnya dipindahkan manual bila disk lama masih terbaca.</li>
+    <li>Container baru memakai token dan folder NAS sendiri. Runner membuat user backup baru dan menghapus akun sementara runner, lalu MariaDB dibuka untuk tulis dan full pertama langsung dijalankan.</li>
+    <li><b>Tidak bisa dibatalkan.</b> Pastikan container lama tidak lagi menerima tulisan, supaya data tidak terpecah. Membuka port dan mengarahkan aplikasi tetap dikerjakan admin.</li>
+  </ul>
+  <div class="field"><label for="pm-name">Nama container baru</label>
+    <input id="pm-name" name="new_name" value="{{ new_name }}" required autocomplete="off" placeholder="mis. simrs-utama-2">
+    <div class="hint">Harus berbeda dari {{ name }}, supaya file di NAS tidak tercampur bila container lama hidup lagi.</div></div>
+  <div class="field"><label for="pm-port">Port data di mesin runner</label>
+    <input id="pm-port" name="port" type="number" min="1024" max="65535" value="{{ port }}" required></div>
+  <div class="field"><label><input type="checkbox" name="confirm" value="yes" required> Saya mengerti aksi ini tidak bisa dibatalkan.</label></div>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-danger" type="submit">Naikkan ke production</button></div>
+</form>

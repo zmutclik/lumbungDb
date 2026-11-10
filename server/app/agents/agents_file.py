@@ -28,7 +28,12 @@ class AgentsFileError(Exception):
 
 
 class AgentsFileWriteError(Exception):
-    """File tidak bisa ditulis; daftar agen tidak berubah."""
+    """File tidak bisa diubah; daftar agen tidak berubah. Teksnya untuk ditampilkan ke admin."""
+
+
+class AgentsFileInvalid(AgentsFileWriteError):
+    """Isi file sudah tidak valid sebelum diubah (biasanya diedit manual). Perubahan ditolak, bukan dilaporkan
+    berhasil: proses yang berjalan masih memakai daftar lama, jadi token yang dicabut akan tetap diterima."""
 
 
 class NameRejected(ValueError):
@@ -50,7 +55,7 @@ class AgentEntries:
         return set(self.active) | set(self.disabled)
 
 
-def parse(text: str) -> AgentEntries:
+def parse(text: str, label: str = "agents.conf") -> AgentEntries:
     active: dict[str, str] = {}
     disabled: set[str] = set()
     projects: dict[str, str] = {}
@@ -65,16 +70,16 @@ def parse(text: str) -> AgentEntries:
             continue
         match = _LINE.match(line)
         if not match or not NAME.fullmatch(match.group("name")):
-            raise AgentsFileError(f"agents.conf baris {number}: format harus 'nama = token' dengan nama yang valid")
+            raise AgentsFileError(f"{label} baris {number}: format harus 'nama = token' dengan nama yang valid")
         name, token = match.group("name"), match.group("token")
         if len(token) < TOKEN_MIN_LENGTH:
-            raise AgentsFileError(f"agents.conf baris {number}: token kurang dari {TOKEN_MIN_LENGTH} karakter")
+            raise AgentsFileError(f"{label} baris {number}: token kurang dari {TOKEN_MIN_LENGTH} karakter")
         if name in active:
-            raise AgentsFileError(f"agents.conf baris {number}: nama {name} ganda")
+            raise AgentsFileError(f"{label} baris {number}: nama {name} ganda")
         project = project_name(name)
         if project in projects:
             raise AgentsFileError(
-                f"agents.conf baris {number}: {name} dan {projects[project]} menghasilkan project compose {project}"
+                f"{label} baris {number}: {name} dan {projects[project]} menghasilkan project compose {project}"
             )
         projects[project] = name
         active[name] = token
@@ -84,6 +89,7 @@ def parse(text: str) -> AgentEntries:
 class AgentRegistry:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
+        self.label = self.path.name
         self._signature: tuple[int, int] | None = None
         self._entries = AgentEntries({}, frozenset())
 
@@ -106,7 +112,7 @@ class AgentRegistry:
         if signature == self._signature and not strict:
             return
         try:
-            self._entries = parse(self.path.read_text())
+            self._entries = parse(self.path.read_text(), self.label)
             self._signature = signature
         except AgentsFileError:
             if strict:
@@ -114,6 +120,10 @@ class AgentRegistry:
             # Diedit salah saat berjalan: agen lama tetap dilayani, kesalahannya muncul saat restart.
             logger.exception("agents_file_invalid")
             self._signature = signature
+
+    def writable(self) -> bool:
+        """Penulisan memakai file kunci dan rename di foldernya, jadi izin folder yang menentukan."""
+        return os.access(self.path.parent, os.W_OK | os.X_OK)
 
     def authenticate(self, token: str | None) -> str | None:
         if not token:
@@ -134,7 +144,17 @@ class AgentRegistry:
                     mode = self.path.stat().st_mode & 0o777
                 except FileNotFoundError:
                     current, mode = "", 0o600
+                try:
+                    parse(current, self.label)
+                except AgentsFileError as err:
+                    raise AgentsFileInvalid(
+                        f"config/{self.label} tidak bisa dibaca ({err}). Perbaiki file itu dulu."
+                    ) from err
                 new_text = change(current)
+                try:
+                    parse(new_text, self.label)
+                except AgentsFileError as err:   # pengaman: perubahan tidak boleh menghasilkan file rusak
+                    raise AgentsFileInvalid(f"Perubahan config/{self.label} ditolak ({err}).") from err
                 fd, tmp = tempfile.mkstemp(dir=directory, prefix=".agents-")
                 try:
                     with os.fdopen(fd, "w") as handle:
@@ -148,7 +168,8 @@ class AgentRegistry:
                         os.unlink(tmp)
                     raise
         except OSError as err:
-            raise AgentsFileWriteError(str(err)) from err
+            logger.exception("agents_file_write_failed")
+            raise AgentsFileWriteError(f"Tidak bisa menulis config/{self.label}; perbaiki izin file.") from err
         self._read(strict=False)
 
     def name_error(self, name: str, entries: AgentEntries | None = None) -> str | None:
@@ -171,7 +192,7 @@ class AgentRegistry:
         token = secrets.token_urlsafe(24)
 
         def change(current: str) -> str:
-            entries = parse(current)
+            entries = parse(current, self.label)
             error = self.name_error(name, entries)
             if error is None:
                 for other in extra_names:

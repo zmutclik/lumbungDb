@@ -1,0 +1,27 @@
+{% macro schedule_row(kind, title, values, modes, error=None) %}
+<div class="field"><label for="{{ kind }}-mode">{{ title }}</label><div class="bs-row">
+  <select id="{{ kind }}-mode" name="{{ kind }}_mode">
+    {% for value, label in modes %}<option value="{{ value }}"{% if values.mode == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  {% if values.mode == "week" %}<select name="{{ kind }}_dow" aria-label="Hari">{% for day in day_names %}<option value="{{ loop.index0 }}"{% if values.dow == loop.index0 | string %} selected{% endif %}>Tiap {{ day }}</option>{% endfor %}</select>{% endif %}
+  {% if values.mode in ("day", "week") %}<input type="time" name="{{ kind }}_time" value="{{ values.time }}" aria-label="Jam (WIB)">{% endif %}
+  {% if values.mode == "hours" %}<select name="{{ kind }}_every" aria-label="Jeda">{% for n in ("2", "3", "6", "12") %}<option value="{{ n }}"{% if values.every == n %} selected{% endif %}>{{ n }} jam</option>{% endfor %}</select>{% endif %}
+  {% if values.mode == "mins" %}<select name="{{ kind }}_every" aria-label="Jeda">{% for n in ("15", "30", "60") %}<option value="{{ n }}"{% if values.every == n %} selected{% endif %}>{{ n }} menit</option>{% endfor %}</select>{% endif %}
+  {% if values.mode == "custom" %}<input type="text" name="{{ kind }}_cron" value="{{ values.cron }}" maxlength="120" placeholder="mis. 0 */4 * * *" aria-label="Cron" autocomplete="off" spellcheck="false">{% endif %}
+</div></div>
+{% endmacro %}
+<form id="standby-settings-form" hx-put="/containers/{{ name }}/cadangan">
+  <h3>Database cadangan {{ name }}</h3>
+  <div class="field"><label><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}> Nyalakan database cadangan terjadwal</label></div>
+  <div class="field"><label for="sb-runner">Runner cadangan</label>
+    <select id="sb-runner" name="runner"><option value="">— belum dipilih —</option>
+      {% for r in runner_names %}<option value="{{ r }}"{% if r == values.runner %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+    <div class="hint">Harus di server yang berbeda dari container ini, dan butuh disk sebesar data asli dua kali (saat database cadangan baru disiapkan).</div></div>
+  <div hx-post="/containers/{{ name }}/cadangan/preview" hx-trigger="change" hx-include="closest form" hx-target="#standby-settings-form" hx-swap="outerHTML">
+    {{ schedule_row("sfull", "Pemulihan full", values.full, (("day", "Tiap hari"), ("week", "Mingguan"), ("custom", "Kustom (cron)"), ("off", "Mati"))) }}
+    {{ schedule_row("sbinlog", "Penerapan binlog baru", values.binlog, (("mins", "Tiap N menit"), ("hours", "Tiap N jam"), ("custom", "Kustom (cron)"), ("off", "Mati"))) }}
+  </div>
+  {% if error %}<div class="msg-err">✕ {{ error }}</div>{% endif %}
+  <p class="hint">Waktu memakai WIB. Database cadangan berjalan read-only dengan event scheduler mati. Mematikan database cadangan menghapus salinannya dari mesin runner.</p>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Simpan</button></div>
+</form>

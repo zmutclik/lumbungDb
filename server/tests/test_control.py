@@ -10,7 +10,7 @@ from app.core.database import async_session_factory
 from app.nas.monitor import ProbeResult
 from app.nas.service import save_result
 from app.agents.dependencies import registry
-from tests.conftest import login, make_user
+from tests.conftest import AGE, login, make_user
 
 SCHEDULE = {"version": 0, "source": "bawaan", "full": "0 1 * * *", "dump": "0 3 * * *", "binlog": "*/15 * * * *"}
 
@@ -56,6 +56,8 @@ async def new_request(kind="dump", database=None, name="siak-db"):
 
 async def test_heartbeat_requires_token(client):
     assert (await client.post("/api/heartbeat", json=payload(), headers={"X-Token": "x" * 20})).status_code == 401
+    # README, Merotasi token agen: token lama diperiksa dengan badan kosong
+    assert (await client.post("/api/heartbeat", json={}, headers={"X-Token": "x" * 20})).status_code == 401
 
 
 async def test_heartbeat_stores_identity_and_adopts_reported_schedule(client, agent):
@@ -173,8 +175,8 @@ async def test_request_refused_while_nas_down(client, agent):
 
 async def test_full_rejected_when_disk_too_small(client, agent):
     await beat(client, agent, disk={"total": 1000, "free": 10})
-    body = b"x" * 100
-    await client.put("/api/upload/fullbackup/a.gz", content=body, headers=agent)
+    body = AGE + b"x" * 100
+    await client.put("/api/upload/fullbackup/a.gz.age", content=body, headers=agent)
     created = await new_request("full")
     assert created.status == "Ditolak"
     assert (await beat(client, agent, disk={"total": 1000, "free": 10}))["requests"] == []

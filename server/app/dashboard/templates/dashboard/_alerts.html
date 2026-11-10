@@ -4,4 +4,13 @@
 <div class="page-head"><div><h1>Alert <span class="muted">({{ alerts | length }})</span></h1><div class="sub">Dinilai tiap menit dengan aturan biasa. Satu notifikasi saat muncul, pengingat tiap 12 jam, dan satu pesan saat pulih.</div></div></div>
 {{ ui.nas_banner(nas) }}
 {{ ui.alert_table(alerts, alert_since) }}
+<h2 class="section">Notifikasi terakhir</h2>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Waktu</th><th>Pesan</th><th>Status</th></tr></thead><tbody>
+{% for n in notifications %}
+<tr><td>{{ n.created_at | tanggal }}</td><td class="small">{{ n.text | truncate(140) }}</td>
+<td><span class="pill pill-{{ 'ok' if n.status == 'Terkirim' else 'warn' if n.status == 'Menunggu' else 'off' }}">{{ n.status }}</span>{% if n.status == "Menunggu" and n.attempts %}<br><span class="muted small">dicoba {{ n.attempts }} kali</span>{% endif %}</td></tr>
+{% else %}
+<tr><td colspan="3"><div class="empty"><b>Belum ada notifikasi</b>Pesan alert dan laporan tercatat di sini, dan yang gagal terkirim diulang otomatis.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
 </div>

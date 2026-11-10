@@ -1,0 +1,3 @@
+<h3>Nonaktifkan {{ name }}?</h3>
+<ul><li>Baris runner diberi <code>#</code> di <code>config/runners.conf</code>, dan token runner ditolak (401).</li><li>Tugas yang sedang berjalan ditandai tidak terlaksana saat batas waktunya habis.</li><li>Container yang memakai runner ini tidak diuji sampai runner lain dipilih di tab Uji restore.</li></ul>
+<div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-danger" hx-post="/runners/{{ name }}/disable">Nonaktifkan</button></div>

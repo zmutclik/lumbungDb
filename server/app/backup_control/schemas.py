@@ -12,6 +12,22 @@ class ReportedSchedule(BaseModel):
     error: dict | None = None
 
 
+class MetricsSizes(BaseModel):
+    databases: list[dict] = Field(default_factory=list, max_length=50)
+    tables: list[dict] = Field(default_factory=list, max_length=10)
+
+
+class MetricsIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: dict[str, int] = Field(max_length=20)
+    max_connections: int = Field(ge=0)
+    performance_schema: bool = False
+    sizes: MetricsSizes | None = None
+    digests: list[dict] | None = Field(default=None, max_length=10)
+    indexes: list[dict] | None = Field(default=None, max_length=100)
+
+
 class HeartbeatIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -26,6 +42,7 @@ class HeartbeatIn(BaseModel):
     last_upload_ok: int | None = None
     upload_error: dict | None = None
     schedule: ReportedSchedule | None = None
+    metrics: MetricsIn | None = None
 
 
 class RequestStatusIn(BaseModel):

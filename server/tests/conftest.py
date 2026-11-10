@@ -8,6 +8,7 @@ import tempfile
 
 from sqlalchemy.engine import make_url
 
+AGE = b"age-encryption.org/v1\n"   # awal tiap file yang diterima LumbungDB
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 if not TEST_DATABASE_URL:
     raise RuntimeError("Set TEST_DATABASE_URL, mis. mysql+asyncmy://app:app@127.0.0.1:3306/app_test")
@@ -22,11 +23,13 @@ if not _test_db_name.endswith("_test"):
 
 # Harus di-set sebelum modul app diimpor (settings dibaca saat import)
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ.setdefault("BACKUP_AGE_RECIPIENTS", "age1" + "q" * 58)
 os.environ.setdefault("SECRET_KEY", "test-secret-" + "x" * 32)   # ≥ 32 karakter (config.py)
 os.environ["COOKIE_SECURE"] = "false"            # test client memakai http://
 _TEST_ROOT = tempfile.mkdtemp(prefix="lumbung-test-")
 os.environ["DATA_DIR"] = os.path.join(_TEST_ROOT, "data")
 os.environ["AGENTS_FILE"] = os.path.join(_TEST_ROOT, "config", "agents.conf")
+os.environ["RUNNERS_FILE"] = os.path.join(_TEST_ROOT, "config", "runners.conf")
 os.makedirs(os.environ["DATA_DIR"])
 os.makedirs(os.path.dirname(os.environ["AGENTS_FILE"]))
 

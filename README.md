@@ -11,10 +11,21 @@ Pusat pengumpul backup dan laporan kesehatan untuk container MariaDB berbasis im
 | `scripts/` | Uji ujung-ke-ujung |
 | `wireframe/` | Prototype dashboard dengan data contoh |
 
+## Kunci enkripsi backup
+
+Backup dienkripsi di agen sebelum dikirim. **Tanpa kunci privat, backup tidak bisa dipulihkan oleh siapa pun.** Buat dua pasang kunci di mesin tepercaya, bukan di server LumbungDB:
+
+```bash
+age-keygen -o age-runner.key      # disimpan di mesin runner
+age-keygen -o age-pemulihan.key   # disimpan offline, sebaiknya di dua tempat fisik terpisah
+```
+
+Isi `BACKUP_AGE_RECIPIENTS` dengan kedua baris `# public key:` dari file itu, dipisah koma tanpa spasi. Kunci privat jangan pernah disalin ke server LumbungDB, NAS, atau server database. Sebelum data produksi masuk, latih satu pemulihan memakai kunci pemulihan.
+
 ## Memasang LumbungDB
 
 ```bash
-cp .env.example .env && chmod 600 .env       # isi BACKUP_ROOT, DB_PASSWORD, SECRET_KEY, Telegram
+cp .env.example .env && chmod 600 .env       # isi BACKUP_ROOT, DB_PASSWORD, SECRET_KEY, BACKUP_AGE_RECIPIENTS, Telegram
 cp config/agents.conf.example config/agents.conf && chmod 600 config/agents.conf
 touch /mnt/lumbungdb/.lumbung-mounted        # penanda mount, di NFS
 mkdir -p deploy/certs                        # fullchain.pem dan privkey.pem
@@ -38,9 +49,33 @@ Image harus sudah ada di registry atau di server tujuan, karena perintah pasang 
 
 ## Menambah container
 
-Buka Tambah container di dashboard, isi nama dan port, lalu jalankan perintah `curl` yang tampil di server database. Script membuat `.env` dengan password acak di subfolder `<project>/` pada folder tempat perintah dijalankan, menjalankan MariaDB, dan menunggunya sehat. Bila gagal, jalankan perintah yang sama lagi dari folder yang sama; password tidak berubah. Perintah berlaku 2 jam (`INSTALL_COMMAND_HOURS`); yang baru bisa dibuat di halaman verifikasi.
+Buka Tambah container di dashboard, isi nama dan port, lalu jalankan perintah `curl` yang tampil di server database. Script membuat `.env` dengan user dan password acak di subfolder `<project>/` pada folder tempat perintah dijalankan, menjalankan MariaDB, dan menunggunya sehat. Bila gagal, jalankan perintah yang sama lagi dari folder yang sama; user dan password tidak berubah. Perintah berlaku 2 jam (`INSTALL_COMMAND_HOURS`); yang baru bisa dibuat di halaman verifikasi.
 
 Container lama yang volumenya harus tetap terpakai memakai bagian *Container lama atau pasang manual* di halaman yang sama. Bila `mariadb/docker-compose.lumbung.yml` berubah, salin juga ke `server/app/installs/files/`; test gagal bila keduanya berbeda.
+
+## Merotasi token agen
+
+Lakukan bila token sebuah container dicurigai bocor. Selama langkah 2 sampai 5, cron di container tetap membuat backup; file terkirim setelah token baru terpasang.
+
+1. Buat token baru di server LumbungDB:
+   ```bash
+   python3 -c 'import secrets; print(secrets.token_urlsafe(24))'
+   ```
+2. Ganti token pada baris `nama = token` di `config/agents.conf`. Izin file tetap 600.
+3. Restart LumbungDB, lalu pastikan `web` dan `worker` berjalan:
+   ```bash
+   docker compose restart web worker && docker compose ps
+   ```
+   Jangan lewati restart. Baris yang salah tulis menggagalkan start, sedangkan tanpa restart LumbungDB hanya mencatat error di log dan token lama tetap berlaku.
+4. Pastikan token lama ditolak. Hasil yang benar adalah `401`:
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'X-Token: <token-lama>' -H 'Content-Type: application/json' -d '{}' https://<alamat-lumbung>/api/heartbeat
+   ```
+5. Di server database, ganti `LUMBUNG_TOKEN` di `<project>/.env`, lalu buat ulang container di luar jam sibuk, karena MariaDB ikut restart:
+   ```bash
+   cd <project> && docker compose -p <project> -f docker-compose.lumbung.yml --env-file .env up -d
+   ```
+6. Pastikan container di dashboard kembali mengirim heartbeat, dan tinjau riwayat file serta tinjauan checksum sejak waktu token dicurigai bocor.
 
 ## Pengembangan
 

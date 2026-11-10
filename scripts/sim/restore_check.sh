@@ -6,6 +6,7 @@ set -euo pipefail
 mode="$1"; shift
 target=/tmp/pulih
 mkdir -p "$target"
+buka() { age --decrypt --identity /keys/age-runner.key "$1" | zcat; }
 start_server() {
   mariadbd --user=root --datadir="$target" --socket=/tmp/s.sock --skip-networking --skip-grant-tables \
     --event-scheduler=OFF --log-bin=OFF >/tmp/server.log 2>&1 &
@@ -14,7 +15,7 @@ start_server() {
 }
 if [ "$mode" = "full" ]; then
   full="$1"; shift
-  zcat "/nas/$full" | mbstream -x -C "$target"
+  buka "/nas/$full" | mbstream -x -C "$target"
   mariadb-backup --prepare --target-dir="$target" >/tmp/prepare.log 2>&1 || { tail -5 /tmp/prepare.log; exit 2; }
   read -r first_file position _ < "$target/mariadb_backup_binlog_info"
   echo "posisi: $first_file $position"
@@ -22,7 +23,7 @@ if [ "$mode" = "full" ]; then
   echo "isi_full: $(mariadb -S /tmp/s.sock -BNe 'select count(*) from appdb.t')"
   args=(--start-position="$position")
   for binlog in "$@"; do
-    zcat "/nas/$binlog" > "/tmp/$(basename "$binlog").bin"
+    buka "/nas/$binlog" > "/tmp/$(basename "$binlog").bin"
     mariadb-binlog "${args[@]}" "/tmp/$(basename "$binlog").bin" | mariadb -S /tmp/s.sock
     args=()
   done
@@ -30,6 +31,6 @@ if [ "$mode" = "full" ]; then
 else
   mariadb-install-db --user=root --datadir="$target" >/dev/null 2>&1
   start_server
-  zcat "/nas/$1" | mariadb -S /tmp/s.sock
+  buka "/nas/$1" | mariadb -S /tmp/s.sock
   echo "isi_dump: $(mariadb -S /tmp/s.sock -BNe 'select count(*) from appdb.t')"
 fi

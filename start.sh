@@ -73,6 +73,7 @@ docker exec "$DB_CONTAINER" mariadb -ulumbung -plumbung lumbung -e "SELECT 1" >/
 export DEBUG=true COOKIE_SECURE=false WEB_CONCURRENCY=1
 export DATABASE_URL="mysql+asyncmy://lumbung:lumbung@127.0.0.1:$DB_PORT/lumbung"
 export SECRET_KEY="$(cat "$DEV/secret_key")"
+export BACKUP_AGE_RECIPIENTS="age1$(printf 'q%.0s' $(seq 1 58))"   # contoh saja; tidak ada agen di mode dev
 export AGENTS_FILE="$DEV/config/agents.conf" DATA_DIR="$DEV/nas"
 
 cd "$ROOT/server"

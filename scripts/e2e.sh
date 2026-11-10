@@ -15,9 +15,9 @@ COMPOSE=(docker compose -p "$PROJECT" --env-file "$E2E_WORK/.env")
 
 cleanup() {
     [ "${1:-}" = "--keep" ] && return 0
-    docker rm -f lumbunge2e-tls >/dev/null 2>&1 || true
+    docker rm -f -v lumbunge2e-tls >/dev/null 2>&1 || true
     for name in lumbunge2e-baru lumbunge2e-lama lumbunge2e-pasang; do
-        docker rm -f "$name" >/dev/null 2>&1 || true
+        docker rm -f -v "$name" >/dev/null 2>&1 || true
         docker volume rm "${name}_data" "${name}_backup" >/dev/null 2>&1 || true
         docker network rm "${name}_default" >/dev/null 2>&1 || true
     done
@@ -87,6 +87,15 @@ fi
 
 echo "=== Build image MariaDB baru dan lama"
 (cd "$ROOT/mariadb" && PUSH=0 MARIADB_VERSION="${E2E_TAG%%-*}" AGENT_VERSION="${E2E_TAG##*-}" ./build-image.sh >/dev/null 2>&1)
+# Dua penerima, seperti produksi: kunci runner dan kunci pemulihan. Kunci privat tidak masuk ke LumbungDB.
+mkdir -p "$E2E_WORK/keys"
+for key in age-runner age-pemulihan; do
+    docker run --rm --entrypoint age-keygen "zmutclik/mariadb:lumbungdb-$E2E_TAG" 2>/dev/null > "$E2E_WORK/keys/$key.key"
+done
+chmod 644 "$E2E_WORK"/keys/*.key   # hanya kunci uji; dibaca container sementara dengan UID lain
+E2E_AGE_RECIPIENTS="$(grep -h '^# public key:' "$E2E_WORK"/keys/*.key | awk '{print $4}' | paste -sd,)"
+export E2E_AGE_RECIPIENTS
+echo "BACKUP_AGE_RECIPIENTS=$E2E_AGE_RECIPIENTS" >> "$E2E_WORK/.env"
 OLD_SRC="$(mktemp -d)"
 git -C "$ROOT/mariadb" archive HEAD | tar -x -C "$OLD_SRC"
 sed -e "s#build: .#build: {context: $OLD_SRC, args: {MARIADB_VERSION: \"${E2E_TAG%%-*}\"}}#" "$OLD_SRC/docker-compose.yml" > "$E2E_WORK/lama-compose.yml"

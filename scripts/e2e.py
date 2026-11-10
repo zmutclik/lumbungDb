@@ -15,6 +15,8 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = Path(os.environ["E2E_WORK"])
+AGE_HEADER = b"age-encryption.org/v1\n"
+AGE_RECIPIENTS = os.environ["E2E_AGE_RECIPIENTS"]
 BASE = os.environ["E2E_URL"]
 ADMIN_PASSWORD = os.environ["E2E_ADMIN_PASSWORD"]
 TAG = os.environ["E2E_TAG"]
@@ -115,7 +117,7 @@ def latest_request(name, kind):
 
 def compose_env(path, name, token, port, extra=""):
     path.write_text(
-        f"LUMBUNG_URL={INTERNAL_URL}\nLUMBUNG_TOKEN={token}\nIMAGE_TAG={TAG}\nCONTAINER_NAME={name}\n"
+        f"LUMBUNG_URL={INTERNAL_URL}\nLUMBUNG_TOKEN={token}\nLUMBUNG_AGE_RECIPIENTS={AGE_RECIPIENTS}\nIMAGE_TAG={TAG}\nCONTAINER_NAME={name}\n"
         f"CONTAINER_HOSTNAME={name}\nDATA_PORT={port}\nDB_ROOTPASSWORD=rootpass\nDB_APPUSER=appuser\n"
         "DB_APPPASS=apppass\nDB_NAME=appdb\nBACKUP_USER=user_backup\nBACKUP_PASS=backuppass\n"
         "INTERVAL_SECONDS=5\nSTABLE_SECONDS=8\nDB_MEM_LIMIT=1G\n" + extra
@@ -139,6 +141,13 @@ def wait_sql_ready(name):
 def nas_files(name, kind):
     folder = WORK / "nas" / name / kind
     return sorted(p for p in folder.rglob("*.gz*") if p.is_file()) if folder.exists() else []
+
+
+def decrypted_sha256(path, key="age-runner.key"):
+    """Kunci privat hanya ada di luar LumbungDB; di sini di folder kerja uji."""
+    result = run("docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{path}:/berkas:ro", "-v", f"{WORK / 'keys'}:/keys:ro",
+                 f"zmutclik/mariadb:lumbungdb-{TAG}", "-c", f"age --decrypt --identity /keys/{key} /berkas | sha256sum", check_rc=False)
+    return result.stdout.split()[0] if result.stdout.split() else ""
 
 
 def request_and_wait(ui, name, what, kind, timeout=240):
@@ -198,12 +207,18 @@ def test_install_script(ui):
     values = dict(line.split("=", 1) for line in env_file.read_text().splitlines() if "=" in line and line[0] != "#")
     check("token agen dan port masuk .env", values["LUMBUNG_TOKEN"] == agent_token and values["DATA_PORT"] == "33096")
     check("password acak terisi", all(len(values[k]) == 32 for k in ("DB_ROOTPASSWORD", "DB_APPPASS", "BACKUP_PASS")))
+    check("user acak terisi", re.fullmatch(r"app_[a-z0-9]{12}", values["DB_APPUSER"])
+          and re.fullmatch(r"backup_[a-z0-9]{12}", values["BACKUP_USER"]), values["DB_APPUSER"] + " " + values["BACKUP_USER"])
     check("token tidak tampil di keluaran script", token not in first.stdout + first.stderr
           and agent_token not in first.stdout + first.stderr)
     check("password tidak ada di keluaran script", values["DB_ROOTPASSWORD"] not in first.stdout + first.stderr)
     login_sql = run("docker", "exec", INSTALL_NAME, "mariadb", f"-u{values['DB_APPUSER']}", f"-p{values['DB_APPPASS']}",
                     values["DB_NAME"], "-BNe", "SELECT 1", check_rc=False)
     check("user aplikasi bisa masuk", login_sql.stdout.strip() == "1", login_sql.stderr)
+    backup_login = run("docker", "exec", INSTALL_NAME, "mariadb", "--defaults-file=/etc/db_backup.cnf", "-BNe",
+                       "SELECT CURRENT_USER()", check_rc=False)
+    check("user backup acak dipakai script backup", backup_login.stdout.strip() == f"{values['BACKUP_USER']}@localhost",
+          backup_login.stdout + backup_login.stderr)
 
     wait_for("heartbeat dari pemasangan script", lambda: (c := ui.container(INSTALL_NAME)) and c["heartbeat_at"], timeout=120)
     done = run_install(token)
@@ -275,9 +290,12 @@ def main():
           db_query("SELECT note, log FROM backup_requests ORDER BY id DESC LIMIT 1"))
     fulls = nas_files(DB_NAME, "fullbackup")
     check("full di NAS", bool(fulls))
-    check("file di NAS cocok dengan sumber", fulls and run(
-        "docker", "exec", DB_NAME, "sha256sum", f"/backup/fullbackup/{fulls[-1].name}"
-    ).stdout.split()[0] == run("sha256sum", str(fulls[-1])).stdout.split()[0])
+    source_sum = run("docker", "exec", DB_NAME, "sha256sum", f"/backup/fullbackup/{fulls[-1].name.removesuffix('.age')}").stdout.split()[0]
+    check("file di NAS terenkripsi", fulls and fulls[-1].read_bytes()[:len(AGE_HEADER)] == AGE_HEADER)
+    check("isi file di NAS cocok dengan sumber", fulls and decrypted_sha256(fulls[-1]) == source_sum)
+    check("kunci pemulihan juga bisa membuka", fulls and decrypted_sha256(fulls[-1], "age-pemulihan.key") == source_sum)
+    missing_key = run("docker", "exec", "-u", "lumbung", DB_NAME, "sh", "-c", "find / -name 'age-*.key' 2>/dev/null", check_rc=False).stdout.strip()
+    check("kunci privat tidak ada di container", not missing_key, missing_key)
     start = db_query(f"SELECT binlog_start FROM backups WHERE container='{DB_NAME}' AND kind='fullbackup' ORDER BY id DESC LIMIT 1")
     check("full mencatat binlog_start", start.startswith("mysql-bin."), start)
     check(".info tidak dikirim sebagai backup", not list((WORK / "nas" / DB_NAME / "fullbackup").glob("*.info")))
@@ -307,6 +325,8 @@ def main():
     check("error dilaporkan", bool(message), message)
     check("crontab lama tetap", "7 4 * * *" in container_exec(DB_NAME, "crontab", "-l").stdout)
     wait_for("alert jadwal ditolak", lambda: ui.has_alert(f"schedule-error:{DB_NAME}"), timeout=15)
+    # Pesan dikirim worker pada putaran berikutnya; jadwal jangan dipulihkan sebelum itu.
+    wait_for("pesan jadwal ditolak", lambda: any("Agen menolak jadwal" in m for m in telegram_messages()), timeout=20)
     ui.write("PUT", f"/containers/{DB_NAME}/schedule", data={
         "full_mode": "day", "full_time": "04:07", "dump_mode": "day", "dump_time": "05:09",
         "binlog_mode": "mins", "binlog_every": "30"})
@@ -324,6 +344,9 @@ def main():
         f"SELECT status FROM backup_requests WHERE id={request_id}") == "Tidak selesai", timeout=60)
     check("berakhir Tidak selesai", bool(result), db_query(f"SELECT status FROM backup_requests WHERE id={request_id}"))
     wait_sql_ready(DB_NAME)
+    socket_check = run("docker", "exec", "-u", "lumbung", DB_NAME, "python3", "-c",
+                       "import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/mysqld/mysqld.sock')", check_rc=False)
+    check("agen bisa memeriksa socket MariaDB", socket_check.returncode == 0, socket_check.stderr[-200:])
     time.sleep(15)
     check("tidak diulang", len(nas_files(DB_NAME, "fullbackup")) == before)
     leftover = container_exec(DB_NAME, "sh", "-c", "ls /backup/fullbackup/ | grep -c '\\.tmp$'").stdout.strip()
@@ -343,7 +366,7 @@ def main():
     run("docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{volume}:/backup", f"zmutclik/mariadb:lumbungdb-{TAG}", "-c",
         f"mkdir -p /backup/databases/darurat && echo isi | gzip > /backup/databases/darurat/darurat-{stamp}.sql.gz")
     drained = run("docker", "run", "--rm", "--entrypoint", "lumbung-agent",
-                  "-e", f"LUMBUNG_URL={INTERNAL_URL}", "-e", f"LUMBUNG_TOKEN={token}",
+                  "-e", f"LUMBUNG_URL={INTERNAL_URL}", "-e", f"LUMBUNG_TOKEN={token}", "-e", f"LUMBUNG_AGE_RECIPIENTS={AGE_RECIPIENTS}",
                   "-v", f"{volume}:/backup:ro", f"zmutclik/mariadb:lumbungdb-{TAG}", "--drain", check_rc=False)
     check("drain selesai", drained.returncode == 0, drained.stdout + drained.stderr)
     check("file darurat sampai di NAS", bool(nas_files(DB_NAME, "databases/darurat")))
@@ -396,7 +419,7 @@ def main():
     marker = WORK / "nas" / ".lumbung-mounted"
     marker.unlink()
     wait_for("alert NAS", lambda: ui.has_alert("nas"), timeout=90, interval=3)
-    upload = httpx.put(f"{BASE}/api/upload/fullbackup/x.gz", content=b"x", headers={"X-Token": token})
+    upload = httpx.put(f"{BASE}/api/upload/fullbackup/x.gz.age", content=AGE_HEADER, headers={"X-Token": token})
     check("upload ditolak 503", upload.status_code == 503, upload.status_code)
     check("banner tampil", "NAS tidak ter-mount" in ui.http.get("/dashboard").text)
     refused = ui.write("POST", f"/containers/{DB_NAME}/requests", data={"what": "binlog"})
@@ -492,10 +515,10 @@ def simulate_alerts_and_failures(ui, token, old_token, hostname):
     check("dashboard tetap menjawab cepat", page.status_code == 200 and time.time() - begin < 2, time.time() - begin)
     check("banner tidak merespons", "NAS tidak merespons" in page.text)
     check("watchdog tetap menjawab", httpx.get(f"{BASE}/api/watchdog").json() == {"nas": "hang"})
-    check("upload baru ditolak 503", httpx.put(f"{BASE}/api/upload/fullbackup/x.gz", content=b"x", headers={"X-Token": token}).status_code == 503)
+    check("upload baru ditolak 503", httpx.put(f"{BASE}/api/upload/fullbackup/x.gz.age", content=AGE_HEADER, headers={"X-Token": token}).status_code == 503)
     time.sleep(12)
     probes = run("docker", "compose", "-p", PROJECT, "--env-file", str(WORK / ".env"), "exec", "-T", "worker", "python", "-c",
-                 "import os;print(sum(b'probe.py' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()))", cwd=ROOT).stdout.strip()
+                 "import os;print(sum(b'probe.py' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit() and int(p) != os.getpid()))", cwd=ROOT).stdout.strip()
     check("tidak ada proses pemeriksa baru selama tersangkut", probes == "1", probes)
     hang.unlink()
     wait_for("pulih saat proses selesai", lambda: not ui.has_alert("nas"), timeout=30, interval=1)
@@ -506,7 +529,7 @@ def simulate_alerts_and_failures(ui, token, old_token, hostname):
     compose_lumbung("stop", "worker")
     stale = wait_for("watchdog 503", lambda: httpx.get(f"{BASE}/api/watchdog").status_code == 503, timeout=60, interval=3)
     check("watchdog 503 saat pengecek mati", bool(stale))
-    check("upload ditolak saat status basi", httpx.put(f"{BASE}/api/upload/fullbackup/x.gz", content=b"x", headers={"X-Token": token}).status_code == 503)
+    check("upload ditolak saat status basi", httpx.put(f"{BASE}/api/upload/fullbackup/x.gz.age", content=AGE_HEADER, headers={"X-Token": token}).status_code == 503)
     check("banner pengecek", "Pengecek NAS dan alert tidak berjalan" in ui.http.get("/dashboard").text)
     compose_lumbung("start", "worker")
     check("pulih setelah pengecek hidup", bool(wait_for("watchdog 200", lambda: httpx.get(f"{BASE}/api/watchdog").status_code == 200, timeout=40, interval=2)))
@@ -527,7 +550,7 @@ def simulate_alerts_and_failures(ui, token, old_token, hostname):
     grouped = wait_for("alert server", lambda: ui.has_alert(f"server:{machine}"), timeout=120, interval=3)
     check("satu alert per server", bool(grouped))
     check("alert per agen tidak ikut", not ui.has_alert(f"heartbeat:{DB_NAME}") and not ui.has_alert(f"heartbeat:{OLD_NAME}"))
-    check("menyebut nama server", any(f"Agen di server {hostname}" in m for m in telegram_messages()))
+    check("menyebut nama server", bool(wait_for("pesan server", lambda: any(f"Agen di server {hostname}" in m for m in telegram_messages()), timeout=20)))
     run("docker", "start", DB_NAME, OLD_NAME)
     wait_sql_ready(DB_NAME)
     wait_sql_ready(OLD_NAME)
@@ -541,14 +564,22 @@ def simulate_files(ui, token):
     name = f"stabil-{stamp}.sql.gz"
     run("docker", "exec", DB_NAME, "sh", "-c", f"mkdir -p /backup/databases/stabil && echo isi | gzip > /backup/databases/stabil/{name}")
     time.sleep(3)
-    check("belum dikirim sebelum stabil", not (WORK / "nas" / DB_NAME / "databases/stabil" / name).exists())
-    check("dikirim setelah stabil", bool(wait_for("file stabil", lambda: (WORK / "nas" / DB_NAME / "databases/stabil" / name).exists(), timeout=40)))
+    check("belum dikirim sebelum stabil", not (WORK / "nas" / DB_NAME / "databases/stabil" / f"{name}.age").exists())
+    check("dikirim setelah stabil", bool(wait_for("file stabil", lambda: (WORK / "nas" / DB_NAME / "databases/stabil" / f"{name}.age").exists(), timeout=40)))
+    time.sleep(3)  # file sudah ada di NAS sebelum respons upload-nya tercatat di log
+    marker = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    time.sleep(1)  # --since hanya sampai detik; tanpa Z, docker membacanya sebagai waktu lokal
+    sent_before = set(json.loads(container_exec(DB_NAME, "cat", "/backup/.lumbung/agent/sent.json").stdout))
+    check("file stabil tercatat terkirim", f"databases/stabil/{name}" in sent_before, sorted(sent_before)[:5])
     run("docker", "exec", DB_NAME, "pkill", "-f", "/opt/lumbung/agent.py")
-    marker = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
     wait_for("agen hidup lagi", lambda: container_exec(DB_NAME, "pgrep", "-f", "/opt/lumbung/agent.py").returncode == 0, timeout=30)
     time.sleep(20)
     logs = run("docker", "compose", "-p", PROJECT, "--env-file", str(WORK / ".env"), "logs", "--since", marker, "web", cwd=ROOT).stdout
-    check("tidak ada yang dikirim ulang setelah agen restart", '"/api/upload/' not in logs and "/api/upload/" not in logs, logs[-300:])
+    # File baru, misalnya binlog hasil rotasi saat container start tadi, memang harus tetap terkirim.
+    uploads = {path.removesuffix(".age") for path in re.findall(r"PUT /api/upload/(\S+)", logs)}
+    resent = uploads & sent_before
+    check("tidak ada yang dikirim ulang setelah agen restart", not resent, sorted(resent))
+    print(f"  catatan: file baru yang terkirim sesudah agen restart: {sorted(uploads - sent_before)}")
 
     # 1 GB bila ruang disk cukup; file ini ikut tertulis di volume /backup
     big_mb = 1024 if docker_free_mb() > 5000 else 300
@@ -564,42 +595,48 @@ def simulate_files(ui, token):
             peak[0] = max(peak[0], float(usage[:-3]))
         elif usage.endswith("GiB"):
             peak[0] = max(peak[0], float(usage[:-3]) * 1024)
-        return (WORK / "nas" / DB_NAME / "fullbackup" / big).exists()
+        return (WORK / "nas" / DB_NAME / "fullbackup" / f"{big}.age").exists()
 
     check(f"file {big_mb} MB sampai", bool(wait_for("file besar", arrived, timeout=300, interval=2)))
-    target = WORK / "nas" / DB_NAME / "fullbackup" / big
-    check("checksum file besar cocok", target.exists() and run("sha256sum", str(target)).stdout.split()[0] == source_sum)
-    check(f"memori web tetap kecil (puncak {peak[0]:.0f} MiB)", 0 < peak[0] < 400, peak[0])
+    target = WORK / "nas" / DB_NAME / "fullbackup" / f"{big}.age"
+    check("checksum file besar cocok", target.exists() and decrypted_sha256(target) == source_sum)
+    check("salinan sementara agen terhapus", container_exec(DB_NAME, "sh", "-c", "ls -A /backup/.lumbung/agent/spool").stdout.strip() == "")
+    # Pemakaian cgroup ikut menghitung halaman tmpfs saat NAS tiruan ada di /tmp, jadi yang dinilai RSS puncak proses.
+    print(f"  catatan: puncak pemakaian cgroup web {peak[0]:.0f} MiB, termasuk tmpfs dan page cache")
+    rss = run("docker", "compose", "-p", PROJECT, "--env-file", str(WORK / ".env"), "exec", "-T", "web", "python", "-c",
+              "import glob,re;print(max([int(m.group(1)) for f in glob.glob('/proc/[0-9]*/status') for m in [re.search(r'VmHWM:\\s+(\\d+)', open(f).read())] if m] or [0])//1024)", cwd=ROOT).stdout.strip()
+    check(f"RSS puncak proses web tetap kecil ({rss} MiB)", rss.isdigit() and 0 < int(rss) < 400, rss)
     run("docker", "exec", DB_NAME, "rm", "-f", f"/backup/fullbackup/{big}")
 
     step("Upload terputus di tengah: tidak ada sisa, dan bisa diulang")
 
     def broken():
-        yield b"x" * 5_000_000
+        yield AGE_HEADER + b"x" * 5_000_000
         raise ConnectionError("putus")
 
     try:
-        httpx.put(f"{BASE}/api/upload/fullbackup/putus.gz", content=broken(), headers=headers, timeout=20)
+        httpx.put(f"{BASE}/api/upload/fullbackup/putus.gz.age", content=broken(), headers=headers, timeout=20)
     except Exception:
         pass
     time.sleep(3)
     folder = WORK / "nas" / DB_NAME / "fullbackup"
     check("tidak ada .part tersisa", not list(folder.glob(".*part")), list(folder.glob(".*part")))
-    check("nama akhir tidak dibuat", not (folder / "putus.gz").exists())
-    retry = httpx.put(f"{BASE}/api/upload/fullbackup/putus.gz", content=b"utuh", headers=headers, timeout=20)
-    check("upload ulang berhasil", retry.status_code == 200 and (folder / "putus.gz").read_bytes() == b"utuh", retry.text)
-    db_query(f"DELETE FROM backups WHERE container='{DB_NAME}' AND relpath='putus.gz'")
+    check("nama akhir tidak dibuat", not (folder / "putus.gz.age").exists())
+    retry = httpx.put(f"{BASE}/api/upload/fullbackup/putus.gz.age", content=AGE_HEADER + b"utuh", headers=headers, timeout=20)
+    check("upload ulang berhasil", retry.status_code == 200 and (folder / "putus.gz.age").read_bytes() == AGE_HEADER + b"utuh", retry.text)
+    db_query(f"DELETE FROM backups WHERE container='{DB_NAME}' AND relpath='putus.gz.age'")
 
     step("Upload bersamaan melewati batas: 503, dashboard tetap menjawab, dan semua berhasil saat diulang")
     from concurrent.futures import ThreadPoolExecutor
 
     def slow_body():
+        yield AGE_HEADER
         for _ in range(20):
             yield b"y" * 100_000
             time.sleep(0.2)
 
     def send(index):
-        return httpx.put(f"{BASE}/api/upload/fullbackup/bersama{index}.gz", content=slow_body(), headers=headers, timeout=60).status_code
+        return httpx.put(f"{BASE}/api/upload/fullbackup/bersama{index}.gz.age", content=slow_body(), headers=headers, timeout=60).status_code
 
     with ThreadPoolExecutor(12) as pool:
         futures = [pool.submit(send, index) for index in range(12)]
@@ -609,7 +646,7 @@ def simulate_files(ui, token):
         codes = [future.result() for future in futures]
     check("sebagian ditolak 503", 503 in codes and 200 in codes and set(codes) <= {200, 503}, codes)
     with ThreadPoolExecutor(2) as pool:
-        retried = list(pool.map(lambda i: httpx.put(f"{BASE}/api/upload/fullbackup/bersama{i}.gz", content=b"z" * 100, headers=headers, timeout=60).status_code,
+        retried = list(pool.map(lambda i: httpx.put(f"{BASE}/api/upload/fullbackup/bersama{i}.gz.age", content=AGE_HEADER + b"z" * 100, headers=headers, timeout=60).status_code,
                                 [i for i, code in enumerate(codes) if code == 503]))
     check("semua berhasil saat diulang", set(retried) <= {200}, retried)
     db_query(f"DELETE FROM backups WHERE container='{DB_NAME}' AND relpath LIKE 'bersama%'")
@@ -617,7 +654,7 @@ def simulate_files(ui, token):
 
 def restore_check(*args):
     return run("docker", "run", "--rm", "--entrypoint", "/sim/restore_check.sh",
-               "-v", f"{WORK / 'nas' / DB_NAME}:/nas:ro", "-v", f"{ROOT / 'scripts/sim'}:/sim:ro",
+               "-v", f"{WORK / 'nas' / DB_NAME}:/nas:ro", "-v", f"{ROOT / 'scripts/sim'}:/sim:ro", "-v", f"{WORK / 'keys'}:/keys:ro",
                f"zmutclik/mariadb:lumbungdb-{TAG}", *args, check_rc=False)
 
 
@@ -629,9 +666,16 @@ def simulate_restore(ui):
     sql(DB_NAME, "INSERT INTO t (isi) VALUES ('setelah full 1'), ('setelah full 2')")
     source = int(sql(DB_NAME, "SELECT COUNT(*) FROM t"))
     check("Binlog: Selesai", request_and_wait(ui, DB_NAME, "binlog", "binlog") == "Selesai")
-    row = db_query(f"SELECT stored_path, binlog_start, chain_id FROM backups WHERE container='{DB_NAME}' AND kind='fullbackup' "
-                   "AND binlog_start IS NOT NULL ORDER BY backup_at DESC LIMIT 1").split("\t")
-    check("full terkait ke rantai binlog", row[2] not in ("NULL", ""), row)
+
+    def latest_full():
+        return db_query(f"SELECT stored_path, binlog_start, chain_id FROM backups WHERE container='{DB_NAME}' AND kind='fullbackup' "
+                        "AND binlog_start IS NOT NULL ORDER BY backup_at DESC LIMIT 1").split("\t")
+
+    # Full masuk rantai saat binlog awalnya tiba. Binlog itu bisa berasal dari cron dan masih menunggu STABLE_SECONDS.
+    linked = wait_for("full terkait", lambda: latest_full()[2] not in ("NULL", ""), timeout=45)
+    row = latest_full()
+    check("full terkait ke rantai binlog", bool(linked), row)
+    time.sleep(12)  # arsip cron lain yang masih menunggu STABLE_SECONDS
     number = int(row[1].rsplit(".", 1)[1])
     binlogs = db_query(f"SELECT stored_path FROM backups WHERE container='{DB_NAME}' AND kind='binlog' AND chain_id={row[2]} "
                        f"AND binlog_no>={number} ORDER BY binlog_no").split("\n")
@@ -698,13 +742,13 @@ def simulate_tls(token):
     run("docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{volume}:/backup", f"zmutclik/mariadb:lumbungdb-{TAG}", "-c",
         f"mkdir -p /backup/databases/tls && echo isi | gzip > /backup/databases/tls/{name}")
     run("docker", "stop", "-t", "2", DB_NAME)
-    untrusted = run("docker", "run", "--rm", "--entrypoint", "lumbung-agent", "-e", f"LUMBUNG_URL={base}", "-e", f"LUMBUNG_TOKEN={token}",
+    untrusted = run("docker", "run", "--rm", "--entrypoint", "lumbung-agent", "-e", f"LUMBUNG_URL={base}", "-e", f"LUMBUNG_TOKEN={token}", "-e", f"LUMBUNG_AGE_RECIPIENTS={AGE_RECIPIENTS}",
                     "-v", f"{volume}:/backup:ro", f"zmutclik/mariadb:lumbungdb-{TAG}", "--drain", check_rc=False)
-    check("agen menolak sertifikat tak dipercaya", untrusted.returncode != 0 and not (WORK / "nas" / DB_NAME / "databases/tls" / name).exists(), untrusted.stdout[-200:])
-    trusted = run("docker", "run", "--rm", "--entrypoint", "lumbung-agent", "-e", f"LUMBUNG_URL={base}", "-e", f"LUMBUNG_TOKEN={token}",
+    check("agen menolak sertifikat tak dipercaya", untrusted.returncode != 0 and "LUMBUNG_AGE_RECIPIENTS" not in untrusted.stdout + untrusted.stderr and not (WORK / "nas" / DB_NAME / "databases/tls" / f"{name}.age").exists(), untrusted.stdout[-200:])
+    trusted = run("docker", "run", "--rm", "--entrypoint", "lumbung-agent", "-e", f"LUMBUNG_URL={base}", "-e", f"LUMBUNG_TOKEN={token}", "-e", f"LUMBUNG_AGE_RECIPIENTS={AGE_RECIPIENTS}",
                   "-e", "SSL_CERT_FILE=/certs/fullchain.pem", "-v", f"{certs}:/certs:ro",
                   "-v", f"{volume}:/backup:ro", f"zmutclik/mariadb:lumbungdb-{TAG}", "--drain", check_rc=False)
-    check("agen mengirim lewat HTTPS tepercaya", trusted.returncode == 0 and (WORK / "nas" / DB_NAME / "databases/tls" / name).exists(), trusted.stdout[-300:] + trusted.stderr[-200:])
+    check("agen mengirim lewat HTTPS tepercaya", trusted.returncode == 0 and (WORK / "nas" / DB_NAME / "databases/tls" / f"{name}.age").exists(), trusted.stdout[-300:] + trusted.stderr[-200:])
     run("docker", "start", DB_NAME)
     wait_sql_ready(DB_NAME)
     run("docker", "rm", "-f", "lumbunge2e-tls")

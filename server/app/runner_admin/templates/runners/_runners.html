@@ -1,0 +1,41 @@
+{% import "dashboard/_macros.html" as ui %}
+{% macro job_pill(status) %}<span class="pill pill-{{ 'ok' if status == 'Lolos' else 'bad' if status == 'Gagal' else 'warn' if status == 'Tidak terlaksana' else 'wait' }}">{{ status }}</span>{% endmacro %}
+<div {{ ui.live(request) }}>
+{% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
+<div class="page-head"><div><h1>Runner</h1><div class="sub">Runner mengerjakan uji restore di mesinnya sendiri. Satu tugas per runner, dan tidak di server yang sama dengan container yang diuji.</div></div>
+<div class="actions"><button class="btn btn-pri" hx-get="/runners/new" hx-target="#modal" hx-swap="innerHTML">Tambah runner</button></div></div>
+{{ ui.nas_banner(nas) }}
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Runner</th><th>Status</th><th>Server</th><th>Heartbeat</th><th>Scratch bebas</th><th>Tugas berjalan</th><th>Container</th><th></th></tr></thead><tbody>
+{% for row in rows %}
+{% set beat = row.heartbeat %}
+<tr class="{% if row.status == 'bad' %}row-bad{% endif %}">
+  <td><b>{{ row.name }}</b>{% if beat and beat.version %}<br><span class="muted small">versi {{ beat.version }}</span>{% endif %}</td>
+  <td><span class="pill pill-{{ row.status }}">{{ row.status_text }}</span></td>
+  <td>{{ (beat.server if beat else None) or "—" }}</td>
+  <td>{{ beat.at | ago if beat else "—" }}</td>
+  <td>{% if beat and beat.scratch_free is not none %}{{ beat.scratch_free | filesize }} dari {{ beat.scratch_total | filesize }}{% else %}—{% endif %}</td>
+  <td>{% if row.running %}<a href="/containers/{{ row.running.container }}/uji-restore">{{ row.running.container }}</a><br><span class="muted small">{{ row.running.step or "mulai" }}</span>{% else %}—{% endif %}</td>
+  <td>{% for name in row.containers %}<a href="/containers/{{ name }}/uji-restore">{{ name }}</a>{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
+  <td>{% if row.active %}<details class="row-menu"><summary aria-label="Aksi untuk {{ row.name }}">⋮</summary><div class="menu-pop"><button class="danger" hx-get="/runners/{{ row.name }}/disable" hx-target="#modal" hx-swap="innerHTML">Nonaktifkan</button></div></details>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="8"><div class="empty"><b>Belum ada runner</b>Tambah runner, lalu pasang di mesin yang bukan server database yang diuji.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+<h2 class="section">Tugas terbaru</h2>
+<div class="tbl-wrap"><table class="t"><thead><tr><th>Tugas</th><th>Container</th><th>Runner</th><th>Status</th><th>Hasil</th><th>Dibuat</th><th>Lama</th></tr></thead><tbody>
+{% for job in jobs %}
+<tr>
+  <td>#{{ job.id }}{% if job.requested_by %}<br><span class="muted small">oleh {{ job.requested_by }}</span>{% else %}<br><span class="muted small">terjadwal</span>{% endif %}</td>
+  <td><a href="/containers/{{ job.container }}/uji-restore">{{ job.container }}</a></td>
+  <td>{{ job.runner }}</td>
+  <td>{{ job_pill(job.status) }}{% if job.status == "Berjalan" and job.step %}<br><span class="muted small">{{ job.step }}</span>{% endif %}</td>
+  <td>{% for r in results.get(job.id, []) %}<span class="small">{{ r.kind }}{% if r.database and r.kind == "dump" %} {{ r.database }}{% endif %}: {{ r.status }}{% if r.failed_step %} ({{ r.failed_step }}){% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}{% if job.note %}<span class="small">{{ job.note }}</span>{% else %}—{% endif %}{% endfor %}</td>
+  <td>{{ job.created_at | tanggal }}</td>
+  <td>{{ durasi(job.claimed_at, job.finished_at) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="7"><div class="empty"><b>Belum ada tugas</b>Tugas pertama muncul saat jadwal uji tiba atau saat Uji sekarang ditekan.</div></td></tr>
+{% endfor %}
+</tbody></table></div>
+</div>

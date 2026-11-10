@@ -11,8 +11,10 @@ from app.backup_control.service import request_label
 from app.backups.models import Backup, IntegrityEvent
 from app.containers.models import Container, Heartbeat
 from app.core.config import settings
-from app.integrations import telegram
+from app.notifications import service as notifications
 from app.nas import service as nas_service
+from app.reports import service as report_service
+from app.runners import scheduling as runner_scheduling
 from app.nas.service import NasView
 from app.agents.dependencies import registry
 
@@ -37,6 +39,9 @@ async def load_states(db: AsyncSession) -> list[ContainerState]:
             state.requested_version, state.applied_version = row.requested_version, row.applied_version
             state.source = row.source
             state.schedule_error = row.error_message
+    for container, days in (await report_service.disk_forecasts(db, await db.scalar(select(func.now())))).items():
+        if state := states.get(container):
+            state.disk_full_days = days
     latest_kind: dict[tuple[str, str], datetime] = {}
     for row in (await db.execute(
         select(Backup.container, Backup.kind, Backup.database, func.count().label("files"),
@@ -86,7 +91,8 @@ async def current_alerts(db: AsyncSession) -> tuple[list[ContainerState], NasVie
     now = await db.scalar(select(func.now()))
     states = await load_states(db)
     nas = await nas_service.get_view(db)
-    alerts = compute_alerts(states, nas, now, settings)
+    alerts = (compute_alerts(states, nas, now, settings) + await runner_scheduling.runner_alerts(db)
+              + await notifications.queue_alert(db))
     since = dict((await db.execute(select(Alert.key, Alert.since))).all())
     return states, nas, alerts, since, now
 
@@ -114,6 +120,8 @@ async def reconcile(db: AsyncSession, states: list[ContainerState], items: list[
             messages.append(resolved_message(key, rows[key].cond, by_name, now, settings))
         if gone:
             await db.execute(delete(Alert).where(Alert.key.in_(gone)))
+        for message in messages:        # satu transaksi dengan perubahan tabel alert: tidak ada pesan yang terlewat
+            notifications.enqueue(db, message)
     return messages
 
 
@@ -122,10 +130,9 @@ async def run_check(db: AsyncSession, client: httpx.AsyncClient) -> None:
         now = await db.scalar(select(func.now()))
         states = await load_states(db)
         nas = await nas_service.get_view(db)
-    items = compute_alerts(states, nas, now, settings)
-    messages = await reconcile(db, states, items, now)
-    # Tanpa transaksi terbuka. Gagal kirim hanya dicatat di log dan dicoba lagi saat pengingat berikutnya.
-    for message in messages:
-        await telegram.send_message(
-            client, settings.TELEGRAM_TOKEN, settings.TELEGRAM_CHAT_ID, message, api_base=settings.TELEGRAM_API_BASE,
-        )
+        runner_items = await runner_scheduling.runner_alerts(db)
+        notify_items = await notifications.queue_alert(db)
+    items = compute_alerts(states, nas, now, settings) + runner_items + notify_items
+    await reconcile(db, states, items, now)
+    # Pengiriman di luar transaksi. Yang gagal tetap di antrean dan dicoba lagi dengan jeda yang makin panjang.
+    await notifications.deliver_due(db, client)

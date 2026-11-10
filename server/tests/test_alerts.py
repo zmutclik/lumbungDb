@@ -151,7 +151,10 @@ def sent(monkeypatch):
         messages.append(text)
         return True
 
-    monkeypatch.setattr(alert_service.telegram, "send_message", fake_send)
+    from app.notifications import service as notification_service
+    monkeypatch.setattr(notification_service.settings, "TELEGRAM_TOKEN", "tok")
+    monkeypatch.setattr(notification_service.settings, "TELEGRAM_CHAT_ID", "1")
+    monkeypatch.setattr(notification_service.telegram, "send_message", fake_send)
     return messages
 
 

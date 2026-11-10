@@ -15,3 +15,14 @@ else
 	EOSQL
     unset backupUserEscaped backupPassEscaped
 fi
+
+# User metrik untuk agen (tahap 3): masuk lewat socket sebagai user OS `lumbung`, tanpa password, dan tanpa hak baca isi
+# tabel. SHOW VIEW cukup agar ukuran tabel terlihat di information_schema. Volume lama menjalankan SQL yang sama sekali
+# (lihat README).
+mysql_note "Membuat user metrik 'lumbung'@'localhost' (unix_socket)"
+docker_process_sql --database=mysql <<-EOSQL
+	CREATE USER IF NOT EXISTS 'lumbung'@'localhost' IDENTIFIED VIA unix_socket;
+	GRANT SHOW VIEW ON *.* TO 'lumbung'@'localhost';
+	GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'lumbung'@'localhost';
+	FLUSH PRIVILEGES;
+EOSQL
