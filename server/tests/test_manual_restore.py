@@ -133,7 +133,7 @@ async def test_claim_binds_machine_and_lists_files(client, world):  # noqa: F811
     assert reply.status_code == 200
     values = dict(line.split("=", 1) for line in reply.text.splitlines() if "=" in line)
     assert (values["NAME"], values["PORT"], values["SOURCE"], values["BINLOG_START"]) == ("siak-db-2", "3310", NAME, "mysql-bin.000001")
-    assert values["IMAGE_TAG"] == "12.3-a1"
+    assert values["IMAGE_TAG"] == "12.3-a2"
     files = [line.split() for line in reply.text.splitlines() if line.startswith("FILE ")]
     assert [f[2] for f in files] == ["fullbackup", "binlog", "binlog", "binlog"] and [f[5] for f in files][1:] == ["1", "2", "3"]
     async with async_session_factory() as db:
