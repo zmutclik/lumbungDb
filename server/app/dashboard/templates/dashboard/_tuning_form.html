@@ -1,0 +1,19 @@
+<form id="tuning-form" hx-put="/containers/{{ name }}/tuning">
+  <h3>Tuning MariaDB {{ name }}</h3>
+  <div class="field"><label for="tn-mode">Mode</label>
+    <select id="tn-mode" name="mode">{% for value, title in (("auto", "Otomatis"), ("off", "Mati (config bawaan MariaDB)")) %}<option value="{{ value }}"{% if values.mode == value %} selected{% endif %}>{{ title }}</option>{% endfor %}</select>
+    {% if problems.mode %}<div class="msg-err">✕ {{ problems.mode }}</div>{% endif %}</div>
+  <div class="field"><label for="tn-memory">Memori untuk MariaDB (MB)</label>
+    <input type="number" id="tn-memory" name="memory_mb" min="512" step="128" value="{{ values.memory_mb or '' }}" placeholder="Kosong = limit container{% if limit_mb %} ({{ limit_mb }} MB){% endif %}" inputmode="numeric">
+    {% if problems.memory_mb %}<div class="msg-err">✕ {{ problems.memory_mb }}</div>{% endif %}
+    <div class="hint">{% if limit_mb %}Limit container {{ limit_mb }} MB.{% else %}Container tanpa limit memori: bila kosong, dipakai 50% RAM host.{% endif %} Isi lebih kecil bila ada proses lain di container.</div></div>
+  <div class="field"><label for="tn-conn">Max connections</label>
+    <input type="number" id="tn-conn" name="max_connections" min="10" max="10000" value="{{ values.max_connections }}" inputmode="numeric">
+    {% if problems.max_connections %}<div class="msg-err">✕ {{ problems.max_connections }}</div>{% endif %}
+    <div class="hint">Tiap koneksi dijatah ±2 MB, diambil dari buffer pool.</div></div>
+  <div class="field"><label for="tn-disk">Disk data</label>
+    <select id="tn-disk" name="disk">{% for value, title in (("ssd", "SSD / NVMe"), ("hdd", "HDD")) %}<option value="{{ value }}"{% if values.disk == value %} selected{% endif %}>{{ title }}</option>{% endfor %}</select>
+    {% if problems.disk %}<div class="msg-err">✕ {{ problems.disk }}</div>{% endif %}</div>
+  <p class="hint">Berlaku langsung tanpa restart, kecuali <code>innodb_log_buffer_size</code> dan mode Mati yang berlaku saat container restart. Mengubah ukuran buffer pool saat jam sibuk bisa membuat query sempat melambat.</p>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Simpan</button></div>
+</form>

@@ -1,0 +1,31 @@
+{# Bagian Tuning di Ringkasan. tuning_row: yang diminta LumbungDB; info.tuning: yang dilaporkan agen. #}
+{% set tuning = info.get("tuning") %}
+<div class="section-title section-wrap"><h2>Tuning MariaDB</h2>
+  <span class="actions-end">{% if tuning %}<span class="pill pill-off">{{ {"bawaan": "Tuning bawaan", "env": "Dari env container", "lumbung": "Diatur LumbungDB"}.get(tuning.get("source"), tuning.get("source")) }}</span>{% endif %}
+  {% if view.status != "off" and tuning_row %}<button class="btn btn-sm" hx-get="/containers/{{ view.name }}/tuning/edit" hx-target="#modal" hx-swap="innerHTML">Ubah tuning</button>{% endif %}</span></div>
+{% if not tuning %}
+<p class="muted">Agen di container ini belum mendukung tuning dari LumbungDB.{% if agent_update(info.get("agent_version")) %} Update image ke <code>{{ agent_update(info.get("agent_version")) }}</code>.{% endif %} Sampai itu tuning diatur lewat <code>DB_MEMORY</code>, <code>DB_MAX_CONNECTIONS</code>, dan <code>DB_DISK</code> di <code>.env</code> server.</p>
+{% else %}
+{% if tuning_row and tuning_row.error_version and tuning_row.error_version == tuning_row.requested_version %}<div class="banner banner-bad"><b>Agen menolak tuning versi {{ tuning_row.requested_version }}.</b> {{ tuning_row.error_message }}. Tuning lama tetap dipakai.</div>
+{% elif tuning_row and tuning_row.requested_version > tuning_row.applied_version %}<div class="banner banner-info"><span class="spin"></span> <b>Menunggu diterapkan: versi {{ tuning_row.requested_version }}.</b> Agen mengambilnya pada heartbeat berikutnya.</div>
+{% elif tuning.get("live_note") %}<div class="banner banner-warn"><b>Tersimpan, sebagian belum berlaku.</b> {{ tuning.get("live_note") }}.</div>{% endif %}
+{% set basis = tuning.get("basis") or {} %}{% set limits = tuning.get("limits") or {} %}
+<div class="kv">
+  <div><small>Mode</small>{{ "Otomatis" if tuning.get("mode") == "auto" else "Mati (config bawaan MariaDB)" }}</div>
+  <div><small>Memori untuk MariaDB</small>{% if basis.get("memory_mb") %}{{ (basis.get("memory_mb") * 1048576) | filesize }} <span class="muted small">({{ basis.get("source") }})</span>{% else %}—{% endif %}</div>
+  <div><small>Limit container</small>{% if limits.get("memory_mb") %}{{ (limits.get("memory_mb") * 1048576) | filesize }}{% else %}Tanpa limit{% if limits.get("host_memory_mb") %} <span class="muted small">(RAM host {{ (limits.get("host_memory_mb") * 1048576) | filesize }})</span>{% endif %}{% endif %} · {{ limits.get("cpus") or "—" }} CPU</div>
+  <div><small>Max connections</small>{{ tuning.get("max_connections") }}</div>
+  <div><small>Disk</small>{{ (tuning.get("disk") or "—") | upper }}</div>
+</div>
+{% set values = tuning.get("values") %}{% set running = tuning.get("running") or {} %}
+{% if values %}
+<div class="tbl-wrap mt-s"><table class="t"><thead><tr><th>Parameter</th><th class="num">Dihitung</th><th class="num">Berjalan sekarang</th></tr></thead><tbody>
+{% for name, value in values.items() %}{% set now_value = running.get(name) %}
+<tr><td class="mono">{{ name }}</td>
+  <td class="num">{{ value | filesize if name.endswith("_size") else value }}</td>
+  <td class="num">{% if now_value is none %}—{% else %}{{ now_value | filesize if name.endswith("_size") else now_value }}{% if now_value != value %} <span class="pill pill-warn">setelah restart</span>{% endif %}{% endif %}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% endif %}
+<p class="hint">Dihitung agen dari empat masukan di atas dan limit container. Limit memori dan CPU container diatur Docker di server (<code>DB_MEM_LIMIT</code>, <code>DB_CPUS</code>), tidak dari sini.</p>
+{% endif %}

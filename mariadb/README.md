@@ -45,7 +45,9 @@ Mengubahnya setelah itu tidak mengubah user di database; lihat [Mengganti passwo
 
 ## Tuning otomatis
 
-Setiap container start, `/opt/tuning.sh` membaca limit CPU & memori container lalu menulis `/etc/mysql/conf.d/zz-tuning.cnf`.
+Setiap container start, `/opt/tuning.sh` membaca limit CPU & memori container lalu menulis `/etc/mysql/conf.d/zz-tuning.cnf`
+(perhitungannya di `/opt/lumbung/tuning.py`).
+Masukannya diambil dari tuning yang diatur di dashboard LumbungDB (`/backup/.lumbung/tuning.json`) bila ada, lalu dari env di bawah.
 Tanpa tuning, MariaDB memakai buffer pool default 128MB yang terlalu kecil untuk database besar.
 Hasil perhitungan tampil di `docker logs <container>`.
 
@@ -72,6 +74,26 @@ Jika container tidak punya limit memori dan `DB_MEMORY` kosong, yang terbaca ada
 Karena itu dipakai 50% RAM host dan muncul peringatan di log.
 
 Mengubah limit cukup dengan edit `.env` lalu `docker compose up -d`. Config dihitung ulang saat container dibuat ulang.
+
+### Tuning dari LumbungDB
+
+Di tab Ringkasan container, **Ubah tuning** mengatur empat masukan yang sama (mode, memori, max connections, disk).
+LumbungDB hanya mengirim keempat angka itu; agen meneruskannya ke `lumbung-helper`, yang memvalidasi ulang, menyimpannya,
+menulis ulang `zz-tuning.cnf`, lalu menerapkannya ke MariaDB yang sedang berjalan tanpa restart. Pengecualian:
+`innodb_log_buffer_size` dan mode Mati baru berlaku saat container restart. Dashboard menampilkan nilai yang dihitung
+dan nilai yang sedang dipakai MariaDB berdampingan. Limit memori dan CPU container (`DB_MEM_LIMIT`, `DB_CPUS`) tetap
+diatur di `.env` server, karena Docker yang membatasinya.
+
+Penerapan tanpa restart memakai akun `lumbung_tuning` (unix_socket, user OS tersendiri yang hanya dipakai helper).
+Akun ini hanya bisa memanggil `mysql.lumbung_set_global`, procedure milik root yang hanya menerima variabel tuning dan
+nilai angka; `SET GLOBAL` lain dan isi tabel tidak bisa. Volume baru membuatnya otomatis. Volume yang sudah ada
+menjalankan `scripts/tuning-account.sql` sekali sebagai root:
+
+```bash
+docker exec -i <container> sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"' < scripts/tuning-account.sql
+```
+
+Tanpa akun ini tuning dari LumbungDB tetap tersimpan, tetapi baru berlaku setelah container restart.
 Untuk memaksa nilai tertentu, mount file `.cnf` yang namanya urut setelah `zz-tuning.cnf`:
 
 ```yaml

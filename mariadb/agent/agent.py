@@ -24,6 +24,7 @@ sys.path.insert(0, "/opt/lumbung")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import metrics as metrics_lib  # noqa: E402
 import schedule as schedule_lib  # noqa: E402
+import tuning as tuning_lib  # noqa: E402
 
 HELPER = ["sudo", "-n", "/usr/local/sbin/lumbung-helper"]
 EXIT_ALREADY_RUNNING = 75
@@ -171,6 +172,7 @@ class Agent:
         self.in_flight = set()
         self.outbox = []
         self.schedule_error = None
+        self.tuning_error = None
         self.active_requests = {}
         self.pending = {"count": 0, "bytes": 0}
         self.upload_failures = {}
@@ -437,6 +439,22 @@ class Agent:
             "error": self.schedule_error,
         }
 
+    def _effective_tuning(self):
+        """Tuning yang berlaku menurut tuning.py, dan nilai yang sedang dipakai MariaDB. None bila image lama atau berkas
+        tidak terbaca."""
+        data = self._read_json(tuning_lib.EFFECTIVE_FILE, {})
+        if tuning_lib.inputs_error(data) or not isinstance(data.get("version"), int):
+            return None
+        running = None
+        rows = metrics_lib.query("SELECT " + ", ".join(f"@@global.{name}" for name in tuning_lib.VARIABLES))
+        if rows and len(rows[0]) == len(tuning_lib.VARIABLES):
+            running = {name: int(value) for name, value in zip(tuning_lib.VARIABLES, rows[0], strict=True) if value.isdigit()}
+        return {
+            **{key: data.get(key) for key in ("version", "source", "mode", "memory_mb", "max_connections", "disk",
+                                              "values", "basis", "limits", "live_note")},
+            "running": running, "error": self.tuning_error,
+        }
+
     def heartbeat_payload(self):
         with self.lock:
             failures = sorted(self.upload_failures.items(), key=lambda kv: kv[1]["first_at"])
@@ -458,6 +476,7 @@ class Agent:
             "last_upload_ok": last_ok,
             "upload_error": upload_error,
             "schedule": self._effective_schedule(),
+            "tuning": self._effective_tuning(),
             "metrics": self.collector.payload(),
         }
 
@@ -506,6 +525,33 @@ class Agent:
         self.schedule_error = None
         log(f"jadwal versi {version} diterapkan")
 
+    def handle_tuning(self, wanted):
+        version = wanted.get("version")
+        if not isinstance(version, int) or isinstance(version, bool) or version < 0:
+            self.tuning_error = {"version": 0, "message": "versi tuning tidak valid"}
+            return
+        error = tuning_lib.inputs_error(wanted)
+        if error:
+            self.tuning_error = {"version": version, "message": error}
+            log(f"tuning versi {version} ditolak: {error}")
+            return
+        command = HELPER + ["apply-tuning", str(version), wanted["mode"], str(wanted["memory_mb"]),
+                            str(wanted["max_connections"]), wanted["disk"]]
+        try:
+            # Mengecilkan buffer pool bisa lama di server yang sibuk
+            run = subprocess.run(command, capture_output=True, text=True, timeout=15 * 60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.tuning_error = {"version": version, "message": f"helper gagal: {type(exc).__name__}"}
+            return
+        if run.returncode != 0:
+            message = (run.stderr or "").strip().splitlines()[-1:] or [f"kode {run.returncode}"]
+            self.tuning_error = {"version": version, "message": message[0][:300]}
+            log(f"tuning versi {version} gagal diterapkan: {message[0]}")
+            return
+        self.tuning_error = None
+        note = (run.stdout or "").strip()
+        log(f"tuning versi {version} diterapkan" + (f"; {note}" if note else ""))
+
     def heartbeat_once(self):
         self.flush_outbox()
         code, reply = self.client.json("POST", "/api/heartbeat", self.heartbeat_payload())
@@ -515,8 +561,12 @@ class Agent:
         if not isinstance(reply, dict):
             return
         wanted = reply.get("schedule")
+        wanted_tuning = reply.get("tuning")
         if isinstance(wanted, dict):
             self.handle_schedule(wanted)
+        if isinstance(wanted_tuning, dict):
+            self.handle_tuning(wanted_tuning)
+        if isinstance(wanted, dict) or isinstance(wanted_tuning, dict):
             # Laporkan hasilnya segera, tanpa menunggu putaran berikutnya.
             self.client.json("POST", "/api/heartbeat", self.heartbeat_payload())
         for request in reply.get("requests") or []:

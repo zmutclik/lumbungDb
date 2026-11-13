@@ -19,6 +19,7 @@ def agent_module(monkeypatch):
     monkeypatch.setattr(module, "lower_priority", lambda: None)
     yield module
     sys.modules.pop("schedule", None)
+    sys.modules.pop("tuning", None)
 
 
 def run_request(module, monkeypatch, returncode, db_up):

@@ -259,7 +259,8 @@ async def _detail_context(db, user, name: str, tab: str) -> dict:
 async def container_summary(name: str, request: Request, user: CurrentUserDep, db: DbSession):
     context = await _detail_context(db, user, name, "ringkasan")
     context.update(ai_enabled=get_provider() is not None, ai_explanation=await ai_service.latest_explanation(db, name),
-                   ai_queries=await ai_service.latest_explanation(db, name, "query"))
+                   ai_queries=await ai_service.latest_explanation(db, name, "query"),
+                   tuning_row=await control.get_tuning(db, name))
     return render(request, "dashboard/container.html", "dashboard/_container_summary.html", context)
 
 
@@ -374,6 +375,58 @@ async def schedule_update(name: str, request: Request, user: CurrentUserDep, db:
     except control.ControlError as err:
         raise _control_error(err) from err
     return _done(f"Jadwal disimpan, menunggu agen {name}." if changed else "Tidak ada perubahan jadwal.")
+
+
+# ---------- tuning ----------
+def _tuning_limit(found) -> int | None:
+    limit = ((found.state.info.get("tuning") or {}).get("limits") or {}).get("memory_mb")
+    return limit if isinstance(limit, int) else None
+
+
+def _tuning_values(form) -> dict:
+    def number(key: str, empty: int | None) -> int | None:
+        raw = str(form.get(key, "")).strip()
+        if not raw:
+            return empty
+        return int(raw) if raw.isdigit() and len(raw) <= 9 else None
+
+    return {"mode": str(form.get("mode", "")), "memory_mb": number("memory_mb", 0),
+            "max_connections": number("max_connections", None), "disk": str(form.get("disk", ""))}
+
+
+async def _tuning_form(request, db, user, name: str, values: dict | None, *, problems=None, status_code=200,
+                       headers=None):
+    found = _find(await _base(db, user, "containers"), name)
+    row = await control.get_tuning(db, name)
+    if row is None:
+        raise HTTPException(status_code=409, detail="Agen container ini belum mendukung tuning dari LumbungDB.")
+    if values is None:
+        values = {"mode": row.requested_mode, "memory_mb": row.requested_memory_mb,
+                  "max_connections": row.requested_max_connections, "disk": row.requested_disk}
+    context = {"name": name, "values": values, "problems": problems or {}, "limit_mb": _tuning_limit(found)}
+    return templates.TemplateResponse(request=request, name="dashboard/_tuning_form.html", context=context,
+                                      status_code=status_code, headers=headers)
+
+
+@router.get("/containers/{name}/tuning/edit")
+async def tuning_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _tuning_form(request, db, user, name, None)
+
+
+@router.put("/containers/{name}/tuning")
+async def tuning_update(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    values = _tuning_values(await request.form())
+    limit = _tuning_limit(_find(await _base(db, user, "containers"), name))
+    problems = control.tuning_problems(values, limit)
+    if problems:
+        return await _tuning_form(request, db, user, name, values, problems=problems, status_code=422,
+                                  headers={"HX-Retarget": "#tuning-form", "HX-Reswap": "outerHTML"})
+    await db.rollback()
+    try:
+        changed = await control.update_tuning(db, name, values, user.username, limit)
+    except control.ControlError as err:
+        raise _control_error(err) from err
+    return _done(f"Tuning disimpan, menunggu agen {name}." if changed else "Tidak ada perubahan tuning.")
 
 
 # ---------- uji restore ----------

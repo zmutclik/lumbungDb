@@ -29,6 +29,25 @@ class BackupSchedule(Base):
     reported_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+class ContainerTuning(Base):
+    """Tuning MariaDB yang diminta LumbungDB beserta versinya. Yang berlaku dilaporkan agen di heartbeat (info.tuning).
+
+    Hanya empat masukan; parameter MariaDB dihitung agen dari masukan ini dan limit container."""
+
+    __tablename__ = "container_tuning"
+
+    container: Mapped[str] = mapped_column(String(NAME_LENGTH), ForeignKey("containers.name"), primary_key=True)
+    requested_mode: Mapped[str] = mapped_column(String(4))          # auto | off
+    requested_memory_mb: Mapped[int] = mapped_column()               # 0 = dari limit container
+    requested_max_connections: Mapped[int] = mapped_column()
+    requested_disk: Mapped[str] = mapped_column(String(3))          # ssd | hdd
+    requested_version: Mapped[int] = mapped_column()
+    applied_version: Mapped[int] = mapped_column()
+    error_version: Mapped[int | None] = mapped_column()
+    error_message: Mapped[str | None] = mapped_column(String(300))
+    reported_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class BackupRequest(Base):
     __tablename__ = "backup_requests"
     __table_args__ = (

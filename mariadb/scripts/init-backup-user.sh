@@ -26,3 +26,7 @@ docker_process_sql --database=mysql <<-EOSQL
 	GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'lumbung'@'localhost';
 	FLUSH PRIVILEGES;
 EOSQL
+
+# Akun tuning: mengubah tuning dari LumbungDB tanpa restart, hanya lewat procedure yang membatasi variabelnya.
+mysql_note "Membuat akun tuning 'lumbung_tuning'@'localhost' (unix_socket)"
+docker_process_sql --database=mysql </opt/lumbung/tuning-account.sql

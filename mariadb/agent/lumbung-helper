@@ -1,8 +1,9 @@
 #!/usr/bin/python3 -I
 """Satu-satunya jalur agen ke root. Dipanggil lewat sudo.
 
-Hanya dua aksi:
+Hanya tiga aksi:
   apply-schedule VERSI FULL DUMP BINLOG
+  apply-tuning VERSI MODE MEMORI_MB MAX_CONNECTIONS DISK
   run-backup full | dump [DATABASE] | binlog
 """
 import os
@@ -11,6 +12,7 @@ import sys
 
 sys.path.insert(0, "/opt/lumbung")
 import schedule  # noqa: E402
+import tuning  # noqa: E402
 
 DATABASE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CLEAN_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
@@ -35,6 +37,22 @@ def apply_schedule(args):
         sys.exit(1)
 
 
+def apply_tuning(args):
+    if len(args) != 5 or not all(re.fullmatch(r"[0-9]{1,9}", a) for a in (args[0], args[2], args[3])):
+        refuse("argumen apply-tuning tidak valid")
+    wanted = {"mode": args[1], "memory_mb": int(args[2]), "max_connections": int(args[3]), "disk": args[4]}
+    error = tuning.inputs_error(wanted)
+    if error:
+        refuse(error)
+    try:
+        note = tuning.apply(int(args[0]), wanted)
+    except Exception as exc:  # config lama tetap dipakai
+        print(f"lumbung-helper: gagal menerapkan tuning: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if note:
+        print(note)
+
+
 def run_backup(args):
     if not args or args[0] not in schedule.SCRIPTS:
         refuse("jenis backup tidak dikenal")
@@ -54,6 +72,8 @@ def main():
     action, args = sys.argv[1], sys.argv[2:]
     if action == "apply-schedule":
         apply_schedule(args)
+    elif action == "apply-tuning":
+        apply_tuning(args)
     elif action == "run-backup":
         run_backup(args)
     else:

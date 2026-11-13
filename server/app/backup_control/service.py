@@ -6,7 +6,7 @@ from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backup_control import cron
-from app.backup_control.models import CRON_LENGTH, BackupRequest, BackupSchedule, ControlLog
+from app.backup_control.models import CRON_LENGTH, BackupRequest, BackupSchedule, ContainerTuning, ControlLog
 from app.backup_control.schemas import HeartbeatIn, RequestStatusIn
 from app.backups.models import Backup
 from app.containers.models import Heartbeat
@@ -51,6 +51,8 @@ def request_label(kind: str, database: str | None) -> str:
 async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, ip: str | None = None) -> dict:
     """Jawaban berisi jadwal bila versinya berubah dan permintaan backup yang menunggu."""
     info = {**data.model_dump(exclude={"server", "machine_id", "schedule", "metrics"}), "ip": ip}
+    if data.tuning is not None:
+        info["tuning"] = data.tuning.model_dump(exclude={"version", "error"})
     if data.metrics is not None:
         info["metrics"] = {"performance_schema": data.metrics.performance_schema, "digests": data.metrics.digests,
                            "indexes": data.metrics.indexes}
@@ -63,6 +65,7 @@ async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, 
             server=stmt.inserted.server, machine_id=stmt.inserted.machine_id, at=func.now(), info=stmt.inserted.info,
         ))
         schedule = await _sync_schedule(db, container, data)
+        tuning = await _sync_tuning(db, container, data)
         await metrics_ingest.ingest(db, container, data.metrics, data.disk, await db.scalar(select(func.now())))
         pending = (await db.execute(
             select(BackupRequest.id, BackupRequest.kind, BackupRequest.database)
@@ -73,6 +76,8 @@ async def record_heartbeat(db: AsyncSession, container: str, data: HeartbeatIn, 
     reply: dict = {"requests": [{"id": r.id, "kind": r.kind, "database": r.database} for r in pending]}
     if schedule is not None:
         reply["schedule"] = schedule
+    if tuning is not None:
+        reply["tuning"] = tuning
     return reply
 
 
@@ -115,6 +120,118 @@ async def _sync_schedule(db: AsyncSession, container: str, data: HeartbeatIn) ->
         "version": wanted_row.requested_version, "full": wanted_row.requested_full,
         "dump": wanted_row.requested_dump, "binlog": wanted_row.requested_binlog,
     }
+
+
+TUNING_FIELDS = ("mode", "memory_mb", "max_connections", "disk")
+
+
+def _requested_tuning(row: ContainerTuning) -> dict:
+    return {"mode": row.requested_mode, "memory_mb": row.requested_memory_mb,
+            "max_connections": row.requested_max_connections, "disk": row.requested_disk}
+
+
+def _set_requested_tuning(row: ContainerTuning, values: dict) -> None:
+    row.requested_mode, row.requested_memory_mb = values["mode"], values["memory_mb"]
+    row.requested_max_connections, row.requested_disk = values["max_connections"], values["disk"]
+
+
+async def _sync_tuning(db: AsyncSession, container: str, data: HeartbeatIn) -> dict | None:
+    """Sama dengan jadwal. Agen versi lama tidak melaporkan tuning, jadi barisnya tidak pernah dibuat dan tidak ada
+    yang dikirim."""
+    reported = data.tuning
+    row = await db.get(ContainerTuning, container, with_for_update=True)
+    if reported is None:
+        wanted_row = row
+    elif row is None:
+        values = {key: getattr(reported, key) for key in TUNING_FIELDS}
+        if tuning_problems(values):
+            return None
+        row = ContainerTuning(container=container, requested_version=reported.version,
+                              applied_version=reported.version, reported_at=func.now())
+        _set_requested_tuning(row, values)
+        db.add(row)
+        return None
+    else:
+        row.applied_version = reported.version
+        row.reported_at = func.now()
+        if reported.version > row.requested_version:
+            values = {key: getattr(reported, key) for key in TUNING_FIELDS}
+            if not tuning_problems(values):
+                row.requested_version = reported.version
+                _set_requested_tuning(row, values)
+        error = reported.error if isinstance(reported.error, dict) else None
+        if error and error.get("version") == row.requested_version:
+            row.error_version = row.requested_version
+            row.error_message = str(error.get("message", "tuning ditolak agen"))[:300]
+        elif reported.version == row.requested_version:
+            row.error_version = row.error_message = None
+        wanted_row = row
+    if wanted_row is None or wanted_row.requested_version <= wanted_row.applied_version:
+        return None
+    if wanted_row.error_version == wanted_row.requested_version:
+        return None
+    return {"version": wanted_row.requested_version, **_requested_tuning(wanted_row)}
+
+
+# ---------- tuning ----------
+TUNING_MODES = ("auto", "off")
+TUNING_DISKS = ("ssd", "hdd")
+TUNING_MEMORY_MB = (512, 4 * 1024 * 1024)      # sama dengan tuning.py di image
+TUNING_CONNECTIONS = (10, 10000)
+
+
+def tuning_problems(values: dict, limit_mb: int | None = None) -> dict[str, str]:
+    problems = {}
+    if values.get("mode") not in TUNING_MODES:
+        problems["mode"] = "Pilih otomatis atau mati."
+    memory = values.get("memory_mb")
+    low, high = TUNING_MEMORY_MB
+    if not isinstance(memory, int) or (memory != 0 and not low <= memory <= high):
+        problems["memory_mb"] = f"Kosongkan untuk memakai limit container, atau isi {low}–{high} MB."
+    elif limit_mb and memory > limit_mb:
+        problems["memory_mb"] = f"Melebihi limit memori container ({limit_mb} MB). Naikkan DB_MEM_LIMIT di server dulu."
+    connections = values.get("max_connections")
+    low, high = TUNING_CONNECTIONS
+    if not isinstance(connections, int) or not low <= connections <= high:
+        problems["max_connections"] = f"Isi {low}–{high}."
+    if values.get("disk") not in TUNING_DISKS:
+        problems["disk"] = "Pilih SSD atau HDD."
+    return problems
+
+
+def _tuning_label(key: str, value) -> str:
+    if key == "memory_mb":
+        return "dari limit container" if not value else f"{value} MB"
+    if key == "mode":
+        return "otomatis" if value == "auto" else "mati"
+    return str(value).upper() if key == "disk" else str(value)
+
+
+async def get_tuning(db: AsyncSession, container: str) -> ContainerTuning | None:
+    return await db.get(ContainerTuning, container)
+
+
+async def update_tuning(db: AsyncSession, container: str, values: dict, actor: str, limit_mb: int | None = None) -> bool:
+    """False bila tidak ada perubahan. Tiap perubahan menaikkan versi dan masuk control_log."""
+    if tuning_problems(values, limit_mb):
+        raise ControlError("Tuning tidak valid.", 422)
+    if container not in registry.entries().active:
+        raise ControlError("Container nonaktif.")
+    async with db.begin():
+        row = await db.get(ContainerTuning, container, with_for_update=True)
+        if row is None:
+            raise ControlError("Tuning bisa diubah setelah agen yang mendukungnya mengirim heartbeat.")
+        old = _requested_tuning(row)
+        titles = {"mode": "Mode", "memory_mb": "Memori", "max_connections": "Max connections", "disk": "Disk"}
+        changes = [f"{titles[key]}: {_tuning_label(key, old[key])} → {_tuning_label(key, values[key])}"
+                   for key in TUNING_FIELDS if old[key] != values[key]]
+        if not changes:
+            return False
+        _set_requested_tuning(row, values)
+        row.requested_version += 1
+        row.error_version = row.error_message = None
+        db.add(ControlLog(container=container, actor=actor, action="Ubah tuning", detail=" · ".join(changes)[:1000]))
+    return True
 
 
 # ---------- jadwal ----------
