@@ -238,6 +238,20 @@ Versi dikunci lewat `ARG MARIADB_VERSION` di `Dockerfile` (default `12.3`).
 `MARIADB_AUTO_UPGRADE=1` menjalankan `mariadb-upgrade` otomatis saat container start dengan versi baru.
 MariaDB tidak mendukung downgrade, jadi buat full backup sebelum upgrade.
 
+### Update agen LumbungDB
+
+Agen ada di dalam image, jadi update agen = ganti image, dan **MariaDB ikut restart** (biasanya beberapa detik sampai
+satu menit; lebih lama bila versi MariaDB juga naik). Lakukan di jam sepi.
+
+1. Rilis: `MARIADB_VERSION=12.3 AGENT_VERSION=a2 ./build-image.sh`. Build juga untuk tiap versi MariaDB yang masih
+   dipakai container lama (mis. `11.4`), karena container tidak boleh turun versi.
+2. Naikkan `IMAGE_TAG_DEFAULT` di `.env` LumbungDB, mis. `12.3-a2`. Container dengan agen lebih lama ditandai
+   **Agen perlu update**, dengan tag tujuan yang memakai versi MariaDB container itu sendiri.
+3. Di server DB: ganti `IMAGE_TAG` di `.env`, lalu `docker compose up -d`. Heartbeat berikutnya melaporkan versi baru.
+
+LumbungDB tetap menerima agen versi lama, jadi container boleh diupdate satu per satu. Kembali ke versi lama: pasang
+tag lama (selama versi MariaDB-nya sama).
+
 ### Build dan push image
 
 ```bash

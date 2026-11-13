@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.core.discovery import APP_DIR
+from app.core.versions import agent_update, runner_update
 
 
 def _common_context(request: Request) -> dict:
@@ -108,6 +109,8 @@ templates.env.filters["tanggal_saja"] = tanggal_saja
 templates.env.filters["ago"] = ago
 templates.env.filters["filesize"] = filesize
 templates.env.globals["durasi"] = durasi
+templates.env.globals["agent_update"] = agent_update
+templates.env.globals["runner_update"] = runner_update
 
 
 def is_htmx(request: Request) -> bool:

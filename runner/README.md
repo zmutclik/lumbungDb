@@ -12,6 +12,24 @@ memulihkannya di container sementara tanpa jaringan, lalu melaporkan hasil. Data
 
 Pasang: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
 
+## Update
+
+1. Rilis: `RUNNER_VERSION=r2 ./build-image.sh` (image `lumbungdb/runner:r2`), lalu naikkan `RUNNER_VERSION_LATEST=r2`
+   di `.env` LumbungDB. Runner yang masih lebih lama ditandai **Perlu update ke r2** di halaman Runner.
+2. Di mesin runner: ganti `RUNNER_IMAGE` di `.env.runner`, lalu
+   `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
+
+Bisa kapan saja; database cadangan dan container hasil promote adalah container sendiri dan tetap hidup. Saat `docker stop`:
+
+- Uji restore dan unduhan langsung dihentikan. LumbungDB menandai tugasnya tidak selesai setelah batas waktu tugas
+  lewat; uji berikutnya berjalan sesuai jadwal. Sisa container dan folder dibersihkan saat runner start.
+- Penerapan binlog juga langsung dihentikan. Database cadangan tetap hidup, tetapi penerapan berikutnya ditolak sampai
+  pemulihan full berikutnya (atau **Restore sekarang**).
+- Mengganti database cadangan dan naikkan ke production ditunggu sampai selesai (`stop_grace_period: 15m`), karena
+  terputus di tengah langkah itu bisa meninggalkan database cadangan tanpa akun runner atau datadir setengah pindah.
+
+Paling rapi: update saat kolom **Tugas berjalan** di halaman Runner kosong. Kembali ke versi lama cukup dengan tag lama.
+
 Uji sungguhan terhadap Docker tanpa LumbungDB: `python3 scripts/sim/runner_real.py <image>` (tambah `--corrupt` untuk
 memastikan full yang rusak terdeteksi Gagal).
 

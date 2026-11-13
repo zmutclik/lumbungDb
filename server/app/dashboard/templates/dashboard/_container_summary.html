@@ -36,7 +36,8 @@
   <div><small>Folder NAS</small><code>/lumbungdb/{{ view.name }}/</code></div>
   <div><small>Server</small>{{ state.server or "Belum terhubung" }}</div>
   <div><small>Versi MariaDB</small>{{ info.get("mariadb_version") or "—" }}</div>
-  <div><small>Agen</small>{% if info.get("agent_version") %}Di dalam image · <code>{{ info.get("agent_version") }}</code>{% else %}—{% endif %}</div>
+  {% set agent_newer = agent_update(info.get("agent_version")) %}
+  <div><small>Agen</small>{% if info.get("agent_version") %}Di dalam image · <code>{{ info.get("agent_version") }}</code>{% if agent_newer %} <span class="pill pill-warn">Perlu update</span><br><span class="muted small">Ganti IMAGE_TAG di .env menjadi <code>{{ agent_newer }}</code>, lalu <code>docker compose up -d</code>. MariaDB ikut restart.</span>{% endif %}{% else %}—{% endif %}</div>
   {% for row in schedule_rows %}<div><small>{{ "Arsip binlog" if row.kind == "binlog" else "Jadwal " ~ row.kind }}</small><a href="/containers/{{ view.name }}/backup">{{ row.label }}</a></div>{% endfor %}
 </div>
 </div>

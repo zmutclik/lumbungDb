@@ -5,6 +5,7 @@ dalam image MariaDB lewat `docker run`, jadi mesin runner hanya butuh Docker.
 Hasil tugas ada tiga. "Gagal" berarti backup-nya yang bermasalah (file rusak, prepare gagal, tabel tidak terbaca).
 "Tidak terlaksana" berarti runner yang bermasalah (unduhan putus, Docker error, scratch penuh): backup tidak dicap gagal."""
 import argparse
+import contextlib
 import glob
 import hashlib
 import http.client
@@ -13,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -25,6 +27,7 @@ SERVER_DIR = "/lumbung/server"
 HTTP_TIMEOUT = 60
 CHUNK = 1024 * 1024
 LABEL = "lumbung.runner=1"
+VERSION_FILE = "/opt/lumbung/VERSION"
 SOCKET = "/run/mysqld/mysqld.sock"
 SYSTEM_SCHEMAS = ("information_schema", "performance_schema", "mysql", "sys")
 MAIN_TABLES = 5
@@ -533,7 +536,8 @@ class StandbyRunner(Restorer):
         self._verify_tables(check, password)
         self._stop(check)
         self.containers.remove(check)
-        port = self._swap(new_dir, new_pw, cur_dir, cur_pw, password)
+        with SHUTDOWN.guard():
+            port = self._swap(new_dir, new_pw, cur_dir, cur_pw, password)
         self.extra = {"standby": {"full_backup_id": full["id"], "applied_binlog_no": applied
                                   if applied is not None else _binlog_number(full.get("binlog_start")) - 1
                                   if _binlog_number(full.get("binlog_start")) is not None else None, "port": port}}
@@ -782,7 +786,8 @@ class StandbyRunner(Restorer):
             elif self.job["kind"] == "standby_remove":
                 self.remove()
             elif self.job["kind"] == "standby_promote":
-                self.promote()
+                with SHUTDOWN.guard():
+                    self.promote()
             else:
                 self.apply_binlogs()
             status, note = "Lolos", getattr(self, "note_ok", None)
@@ -812,6 +817,44 @@ def _binlog_number(name):
     return int(digits) if digits.isdigit() else None
 
 
+class Shutdown:
+    """docker stop mengirim SIGTERM. Uji restore dan unduhan boleh langsung berhenti: sisanya dibersihkan saat start
+    dan LumbungDB menandai tugasnya tidak selesai. Mengganti database cadangan dan naikkan ke production tidak boleh
+    terputus di tengah, jadi sinyal ditahan sampai langkah itu selesai; runner berhenti sesudah hasilnya terkirim."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.critical = 0
+
+    def handle(self, signum, frame):
+        self.event.set()
+        if self.critical:
+            log("diminta berhenti; menunggu langkah yang sedang berjalan selesai")
+            return
+        raise SystemExit(0)
+
+    @contextlib.contextmanager
+    def guard(self):
+        self.critical += 1
+        try:
+            yield
+        finally:
+            self.critical -= 1
+
+
+SHUTDOWN = Shutdown()
+
+
+def runner_version():
+    """Versi ditulis ke image saat build. RUNNER_VERSION hanya untuk menjalankan runner.py di luar image."""
+    try:
+        with open(VERSION_FILE) as handle:
+            version = handle.readline().strip()[:40]
+    except OSError:
+        version = ""
+    return version or os.environ.get("RUNNER_VERSION", "dev")
+
+
 def cleanup_leftovers(config, runner=run):
     """Sisa container dan folder dari runner yang mati di tengah tugas."""
     code, out, _ = runner(["docker", "ps", "-aq", "--filter", f"label={LABEL}"])
@@ -827,7 +870,7 @@ def cleanup_leftovers(config, runner=run):
 class Runner:
     def __init__(self, config, client, runner=run):
         self.config, self.client, self.run = config, client, runner
-        self.stop = threading.Event()
+        self.stop = SHUTDOWN.event
         self.pending_result = None       # hasil yang belum terkirim karena LumbungDB tidak terjangkau
 
     @staticmethod
@@ -912,7 +955,7 @@ def load_config():
         "scratch_dir": os.environ.get("SCRATCH_DIR", ""),
         "age_identity": os.environ.get("AGE_IDENTITY_FILE", ""),
         "image": os.environ.get("MARIADB_IMAGE", ""),
-        "version": os.environ.get("RUNNER_VERSION", "dev"),
+        "version": runner_version(),
         "poll_seconds": max(1, int_env("POLL_SECONDS", 15)),
         "ready_seconds": max(5, int_env("READY_SECONDS", 180)),
         "standby_port_base": int_env("STANDBY_PORT_BASE", DEFAULT_STANDBY_PORT),
@@ -933,6 +976,7 @@ def main():
         print("Wajib diisi: " + ", ".join(missing), file=sys.stderr)
         return 2
     os.makedirs(config["scratch_dir"], exist_ok=True)
+    signal.signal(signal.SIGTERM, SHUTDOWN.handle)
     log(f"runner mulai, versi {config['version']}, host {socket.gethostname()}")
     Runner(config, Client(url, token)).loop()
     return 0
