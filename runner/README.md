@@ -14,7 +14,7 @@ Pasang: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compos
 
 ## Update
 
-1. Rilis: `RUNNER_VERSION=r2 ./build-image.sh` (image `lumbungdb/runner:r2`), lalu naikkan `RUNNER_VERSION_LATEST=r2`
+1. Rilis: `RUNNER_VERSION=r2 ./build-image.sh` (image `zmutclik/lumbungdb-runner:r2`), lalu naikkan `RUNNER_VERSION_LATEST=r2`
    di `.env` LumbungDB. Runner yang masih lebih lama ditandai **Perlu update ke r2** di halaman Runner.
 2. Di mesin runner: ganti `RUNNER_IMAGE` di `.env.runner`, lalu
    `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
