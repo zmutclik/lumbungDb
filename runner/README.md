@@ -19,19 +19,20 @@ curl -fsSL https://<lumbung>/install-runner.sh | LUMBUNG_URL=https://<lumbung> I
 
 Kunci privat age runner harus sudah ada di `/etc/lumbung/age-runner.key` (izin 600; lokasi lain lewat
 `AGE_IDENTITY_FILE=/path` sebelum `sh`). Script memeriksa kunci itu salah satu penerima `BACKUP_AGE_RECIPIENTS`, menulis
-`.env.runner` di `lumbung-runner/` pada folder tempat perintah dijalankan, lalu menjalankan runner dengan project
+`.env` dan `docker-compose.yml` di `lumbung-runner/` pada folder tempat perintah dijalankan, lalu menjalankan runner dengan project
 `lumbung-runner`. Perintah berlaku `INSTALL_COMMAND_HOURS`, terikat ke mesin pertama yang memakainya, dan mati setelah
 runner mengirim heartbeat; perintah baru ada di menu ⋮ runner yang belum terhubung. Bila
 `docker-compose.runner.yml` berubah, salin juga ke `server/app/runner_installs/files/`; test gagal bila keduanya berbeda.
 
-Pasang manual: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
+Pasang manual: di satu folder di mesin runner, salin `.env.runner.example` jadi `.env` dan `docker-compose.runner.yml` jadi
+`docker-compose.yml`, isi `.env`, lalu `docker compose up -d`. Pemasangan lama yang masih memakai `.env.runner` dipindah
+ke `.env` saat script pasang dijalankan ulang.
 
 ## Update
 
 1. Rilis: `RUNNER_VERSION=r2 ./build-image.sh` (image `zmutclik/lumbungdb-runner:r2`), lalu naikkan `RUNNER_VERSION_LATEST=r2`
    di `.env` LumbungDB. Runner yang masih lebih lama ditandai **Perlu update ke r2** di halaman Runner.
-2. Di mesin runner: ganti `RUNNER_IMAGE` di `.env.runner`, lalu
-   `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
+2. Di mesin runner: ganti `RUNNER_IMAGE` di `.env` (folder `lumbung-runner/`), lalu `docker compose up -d`.
 
 Bisa kapan saja; database cadangan dan container hasil promote adalah container sendiri dan tetap hidup. Saat `docker stop`:
 

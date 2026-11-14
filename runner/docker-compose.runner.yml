@@ -1,7 +1,8 @@
-# Runner di mesin terpisah dari server container yang diuji.
-#   docker compose -f docker-compose.runner.yml --env-file .env.runner up -d
+# Runner LumbungDB. Di mesin runner file ini disimpan sebagai docker-compose.yml di samping .env, lalu:
+#   docker compose up -d
 # SCRATCH_DIR dipasang dengan path yang sama di host dan di container: runner memberi path itu ke `docker run -v`
 # yang dieksekusi daemon di host.
+name: lumbung-runner
 services:
   runner:
     image: ${RUNNER_IMAGE:?isi RUNNER_IMAGE}

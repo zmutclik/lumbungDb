@@ -6,14 +6,14 @@
 # key-nya tercantum di BACKUP_AGE_RECIPIENTS LumbungDB. Script tidak membuat kunci baru: backup yang sudah ada
 # hanya bisa dibuka kunci yang lama.
 #
-# Pilihan lewat variabel (bila diberikan, menimpa nilai di .env.runner):
+# Pilihan lewat variabel (bila diberikan, menimpa nilai di .env):
 #   AGE_IDENTITY_FILE=/path  lokasi kunci privat age runner
 #   SCRATCH_DIR=/path        disk kerja untuk restore, sebesar data terbesar yang diuji dikali beberapa
-#   INSTALL_DIR=/path        folder .env.runner dan compose; bawaan <folder tempat perintah dijalankan>/lumbung-runner
+#   INSTALL_DIR=/path        folder .env dan docker-compose.yml; bawaan <folder tempat perintah dijalankan>/lumbung-runner
 #
 # User biasa yang tidak ada di grup docker cukup punya sudo: perintah docker otomatis lewat sudo (password ditanya sekali).
 #
-# Aman dijalankan ulang di mesin dan folder yang sama: .env.runner yang sudah ada tetap dipakai; URL, token, dan
+# Aman dijalankan ulang di mesin dan folder yang sama: .env yang sudah ada tetap dipakai; URL, token, dan
 # variabel di atas yang diberikan diperbarui.
 set -eu
 umask 077
@@ -79,40 +79,44 @@ choose_dir() {
 write_env() {
     token_line=$(grep '^LUMBUNG_RUNNER_TOKEN=' "$WORK/session")
     url_line=$(grep '^LUMBUNG_URL=' "$WORK/session")
-    if [ -f "$DIR/.env.runner" ]; then
-        step "Memakai .env.runner yang sudah ada di $DIR; URL dan token diperbarui"
+    # Pemasangan lama menulis .env.runner; dipindah ke .env.
+    if [ -f "$DIR/.env.runner" ] && ! [ -f "$DIR/.env" ]; then
+        mv "$DIR/.env.runner" "$DIR/.env"
+    fi
+    if [ -f "$DIR/.env" ]; then
+        step "Memakai .env yang sudah ada di $DIR; URL dan token diperbarui"
         sed -e "s|^LUMBUNG_RUNNER_TOKEN=.*|$token_line|" -e "s|^LUMBUNG_URL=.*|$url_line|" \
-            "$DIR/.env.runner" > "$DIR/.env.runner.tmp"
+            "$DIR/.env" > "$DIR/.env.tmp"
     else
-        step "Membuat .env.runner di $DIR"
+        step "Membuat .env di $DIR"
         {
             printf '# Runner %s. Dibuat install-runner.sh; boleh diubah, lalu jalankan ulang docker compose.\n' "$NAME"
             grep -v -e '^RUNNER_NAME=' -e '^LUMBUNG_AGE_RECIPIENTS=' "$WORK/session"
-        } > "$DIR/.env.runner.tmp"
+        } > "$DIR/.env.tmp"
     fi
     # Variabel yang diberikan selalu menang, juga saat mengulang setelah gagal di pemeriksaan kunci.
     if [ -n "$SCRATCH_OVERRIDE" ]; then
-        sed -i "s|^SCRATCH_DIR=.*|SCRATCH_DIR=$SCRATCH_OVERRIDE|" "$DIR/.env.runner.tmp"
+        sed -i "s|^SCRATCH_DIR=.*|SCRATCH_DIR=$SCRATCH_OVERRIDE|" "$DIR/.env.tmp"
     fi
     if [ -n "$KEY_OVERRIDE" ]; then
-        sed -i "s|^AGE_IDENTITY_FILE=.*|AGE_IDENTITY_FILE=$KEY_OVERRIDE|" "$DIR/.env.runner.tmp"
+        sed -i "s|^AGE_IDENTITY_FILE=.*|AGE_IDENTITY_FILE=$KEY_OVERRIDE|" "$DIR/.env.tmp"
     fi
-    chmod 600 "$DIR/.env.runner.tmp"
-    mv "$DIR/.env.runner.tmp" "$DIR/.env.runner"
+    chmod 600 "$DIR/.env.tmp"
+    mv "$DIR/.env.tmp" "$DIR/.env"
 
-    SCRATCH=$(env_value SCRATCH_DIR "$DIR/.env.runner")
-    KEY=$(env_value AGE_IDENTITY_FILE "$DIR/.env.runner")
-    IMAGE=$(env_value MARIADB_IMAGE "$DIR/.env.runner")
+    SCRATCH=$(env_value SCRATCH_DIR "$DIR/.env")
+    KEY=$(env_value AGE_IDENTITY_FILE "$DIR/.env")
+    IMAGE=$(env_value MARIADB_IMAGE "$DIR/.env")
     check_path SCRATCH_DIR "$SCRATCH"
     check_path AGE_IDENTITY_FILE "$KEY"
-    [ -n "$IMAGE" ] || die "MARIADB_IMAGE kosong di $DIR/.env.runner."
+    [ -n "$IMAGE" ] || die "MARIADB_IMAGE kosong di $DIR/.env."
 }
 
 # Kunci yang hilang tidak boleh sampai ke docker: bind mount ke path yang tidak ada membuat folder kosong di sana.
 check_key() {
     step "Memeriksa kunci age di $KEY"
     if ! [ -f "$KEY" ] && ! { [ -n "$SUDO" ] && sudo test -f "$KEY"; }; then
-        die "Kunci privat age runner tidak ada di $KEY. Salin kunci runner (yang public key-nya ada di BACKUP_AGE_RECIPIENTS) ke sana dengan izin 600, lalu jalankan perintah yang sama lagi. Lokasi lain: tambahkan AGE_IDENTITY_FILE=/path di depan sh, atau ubah $DIR/.env.runner."
+        die "Kunci privat age runner tidak ada di $KEY. Salin kunci runner (yang public key-nya ada di BACKUP_AGE_RECIPIENTS) ke sana dengan izin 600, lalu jalankan perintah yang sama lagi. Lokasi lain: tambahkan AGE_IDENTITY_FILE=/path di depan sh, atau ubah $DIR/.env."
     fi
     # age-keygen dijalankan dari image MariaDB, sama seperti runner memakai age; image-nya sekaligus terunduh.
     public=$(docker run --rm --network none --entrypoint age-keygen -v "$KEY:/keys/age.key:ro" "$IMAGE" -y /keys/age.key) \
@@ -141,19 +145,20 @@ start_runner() {
     step "Mengambil compose dan menjalankan runner"
     curl -fsS --max-time 30 -o "$WORK/compose.yml" "$BASE_URL/install/docker-compose.runner.yml" \
         || die "Tidak bisa mengunduh compose dari $BASE_URL."
-    mv "$WORK/compose.yml" "$DIR/docker-compose.runner.yml"
-    docker compose -p "$PROJECT" -f "$DIR/docker-compose.runner.yml" --env-file "$DIR/.env.runner" up -d \
+    mv "$WORK/compose.yml" "$DIR/docker-compose.yml"
+    rm -f "$DIR/docker-compose.runner.yml"
+    docker compose -p "$PROJECT" -f "$DIR/docker-compose.yml" --env-file "$DIR/.env" up -d \
         || die "docker compose gagal. Perbaiki penyebabnya, lalu jalankan perintah yang sama lagi."
 }
 
 wait_running() {
     step "Memeriksa runner berjalan"
     sleep 10
-    id=$(docker compose -p "$PROJECT" -f "$DIR/docker-compose.runner.yml" --env-file "$DIR/.env.runner" ps -q runner)
+    id=$(docker compose -p "$PROJECT" -f "$DIR/docker-compose.yml" --env-file "$DIR/.env" ps -q runner)
     running=$(docker inspect -f '{{.State.Running}} {{.State.Restarting}}' "$id" 2>/dev/null || true)
     if [ "$running" != "true false" ]; then
         docker logs --tail 20 "$id" >&2 2>&1 || true
-        die "Runner tidak berjalan. Log lengkap: ${SUDO:+sudo }docker compose -p $PROJECT -f $DIR/docker-compose.runner.yml logs"
+        die "Runner tidak berjalan. Log lengkap: ${SUDO:+sudo }docker compose -p $PROJECT -f $DIR/docker-compose.yml logs"
     fi
 }
 
@@ -164,10 +169,10 @@ Runner $NAME terpasang.
   Folder      : $DIR
   Scratch     : $SCRATCH
   Kunci age   : $KEY
-  Image       : $(env_value RUNNER_IMAGE "$DIR/.env.runner")
+  Image       : $(env_value RUNNER_IMAGE "$DIR/.env")
 
-Ubah .env.runner bila perlu, lalu jalankan:
-  ${SUDO:+sudo }docker compose -p $PROJECT -f $DIR/docker-compose.runner.yml --env-file $DIR/.env.runner up -d
+Ubah .env bila perlu, lalu jalankan:
+  cd $DIR && ${SUDO:+sudo }docker compose up -d
 
 Runner mengirim heartbeat dalam satu menit. Pantau di $BASE_URL/runners
 EOF

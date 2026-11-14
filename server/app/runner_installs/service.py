@@ -1,7 +1,7 @@
 """Pasang runner dengan satu perintah, seperti Tambah container: token berbatas waktu, terikat ke satu mesin, dan mati
 setelah runner mengirim heartbeat.
 
-Token runner berumur panjang tidak masuk riwayat shell; script mengambilnya dari sini dan menulisnya ke .env.runner.
+Token runner berumur panjang tidak masuk riwayat shell; script mengambilnya dari sini dan menulisnya ke .env di mesin runner.
 Kunci privat age tidak pernah lewat sini: script hanya memeriksa kunci yang sudah ada di mesin runner.
 """
 import hashlib
@@ -45,7 +45,7 @@ def install_command(url: str, token: str) -> str:
 
 
 def env_text(token: str, url: str) -> str:
-    """Isi .env.runner, juga untuk pasang manual."""
+    """Isi .env di mesin runner, juga untuk pasang manual."""
     return "\n".join((
         f"LUMBUNG_URL={url}", f"LUMBUNG_RUNNER_TOKEN={token}",
         f"RUNNER_IMAGE={RUNNER_IMAGE}:{settings.RUNNER_VERSION_LATEST}",
@@ -91,7 +91,7 @@ async def forget(db: AsyncSession, name: str) -> None:
 
 
 async def claim(db: AsyncSession, token: str | None, machine_id: str | None, url: str) -> str:
-    """Dipanggil script: memeriksa token, mengikatnya ke mesin, dan menjawab isi .env.runner.
+    """Dipanggil script: memeriksa token, mengikatnya ke mesin, dan menjawab isi .env runner.
 
     Baris LUMBUNG_AGE_RECIPIENTS hanya untuk script, supaya bisa memastikan kunci di mesin runner memang penerima backup.
     """
