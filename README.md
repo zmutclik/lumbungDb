@@ -84,8 +84,9 @@ Lakukan bila token sebuah container dicurigai bocor. Selama langkah 2 sampai 5, 
    ```
 5. Di server database, ganti `LUMBUNG_TOKEN` di `<project>/.env`, lalu buat ulang container di luar jam sibuk, karena MariaDB ikut restart:
    ```bash
-   cd <project> && docker compose -p <project> -f docker-compose.lumbung.yml --env-file .env up -d
+   cd <project> && docker compose -p <project> up -d
    ```
+   Pada pemasangan lama yang compose-nya masih bernama `docker-compose.lumbung.yml`, ganti namanya jadi `docker-compose.yml` dulu.
 6. Pastikan container di dashboard kembali mengirim heartbeat, dan tinjau riwayat file serta tinjauan checksum sejak waktu token dicurigai bocor.
 
 ## Pengembangan

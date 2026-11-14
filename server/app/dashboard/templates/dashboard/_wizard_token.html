@@ -6,7 +6,7 @@
 <div class="once"><b>Token agen hanya ditampilkan sekali.</b> Baris <code>{{ name }} = …</code> sudah ditambahkan ke <code>config/agents.conf</code>. Abaikan bagian ini bila memakai perintah di atas.</div>
 <div class="field"><label>Token agen</label><div class="copy" x-data="copyBox"><code class="tok" x-ref="source">{{ token }}</code><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
 <div class="field"><label>Isi <code>.env</code> di server database</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ env }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
-<div class="field"><label>Salin <code>docker-compose.lumbung.yml</code> ke server, lalu jalankan</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ command }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+<div class="field"><label>Unduh <code>/install/docker-compose.lumbung.yml</code> dari LumbungDB sebagai <code>docker-compose.yml</code> di folder yang sama dengan <code>.env</code>, lalu jalankan</label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ command }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
 <p class="hint"><b>Container lama:</b> ubah <code>IMAGE_TAG</code> ke versi MariaDB yang sedang berjalan, isi <code>CONTAINER_HOSTNAME</code> dengan hasil <code>docker exec &lt;container&gt; hostname</code>, dan pakai nama project lama pada <code>-p</code>, supaya volume data dan <code>/backup</code> yang lama tetap terpakai. MariaDB ikut restart.</p>
 </details>{% endif %}
 <div class="wiz-actions">

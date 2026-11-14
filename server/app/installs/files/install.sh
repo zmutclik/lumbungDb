@@ -4,7 +4,7 @@
 #
 # Pilihan lewat variabel:
 #   DATA_PORT=3307     port lain, bila port pilihan di dashboard sudah terpakai (hanya pemasangan pertama)
-#   INSTALL_DIR=/path  folder .env dan compose; bawaan <folder tempat perintah dijalankan>/<project>
+#   INSTALL_DIR=/path  folder .env dan docker-compose.yml; bawaan <folder tempat perintah dijalankan>/<project>
 #
 # User biasa yang tidak ada di grup docker cukup punya sudo: perintah docker otomatis lewat sudo (password ditanya sekali).
 #
@@ -118,8 +118,9 @@ start_container() {
     step "Mengambil compose dan menjalankan MariaDB"
     curl -fsS --max-time 30 -o "$WORK/compose.yml" "$BASE_URL/install/docker-compose.lumbung.yml" \
         || die "Tidak bisa mengunduh compose dari $BASE_URL."
-    mv "$WORK/compose.yml" "$DIR/docker-compose.lumbung.yml"
-    docker compose -p "$PROJECT" -f "$DIR/docker-compose.lumbung.yml" --env-file "$DIR/.env" up -d \
+    mv "$WORK/compose.yml" "$DIR/docker-compose.yml"
+    rm -f "$DIR/docker-compose.lumbung.yml"
+    docker compose -p "$PROJECT" -f "$DIR/docker-compose.yml" --env-file "$DIR/.env" up -d \
         || die "docker compose gagal. Perbaiki penyebabnya, lalu jalankan perintah yang sama lagi."
 }
 
@@ -148,7 +149,7 @@ $NAME terpasang.
   Password    : ada di $DIR/.env, begitu juga user backup; tidak dikirim ke LumbungDB
 
 Batas bawaan 2 CPU dan 2G memori; ubah DB_CPUS dan DB_MEM_LIMIT di .env, lalu jalankan:
-  ${SUDO:+sudo }docker compose -p $PROJECT -f $DIR/docker-compose.lumbung.yml --env-file $DIR/.env up -d
+  cd $DIR && ${SUDO:+sudo }docker compose up -d
 Port terbuka di semua alamat server ini; batasi di firewall hanya untuk IP aplikasi.
 
 Agen mengirim heartbeat dalam 60 detik. Pantau di $BASE_URL/containers/$NAME/verify

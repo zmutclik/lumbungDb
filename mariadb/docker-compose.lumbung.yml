@@ -1,5 +1,6 @@
-# Compose referensi zmutclik/mariadb, tag lumbungdb-*. Satu project per container:
-#   docker compose -p <project> -f docker-compose.lumbung.yml --env-file .env up -d
+# Compose referensi zmutclik/mariadb, tag lumbungdb-*. Satu project per container. Di server database file ini
+# disimpan sebagai docker-compose.yml di samping .env, lalu:
+#   docker compose -p <project> up -d
 services:
   mariadb:
     # Tanpa nilai bawaan: compose gagal bila IMAGE_TAG kosong, supaya versi MariaDB tidak naik diam-diam.

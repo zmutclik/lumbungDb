@@ -201,7 +201,7 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
     context = {
         "name": name, "token": token, "env": install_service.env_text(name, token, url, port), "step": 2,
         "install_command": install_service.install_command(url, install_token), "expires_at": expires_at, "base_url": url,
-        "command": f"docker compose -p {project_name(name)} -f docker-compose.lumbung.yml --env-file .env up -d",
+        "command": f"docker compose -p {project_name(name)} up -d",
     }
     return templates.TemplateResponse(request=request, name="dashboard/_wizard_token.html", context=context)
 
