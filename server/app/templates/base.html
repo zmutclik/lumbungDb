@@ -9,6 +9,7 @@
   <title>{% block title %}LumbungDB{% endblock %} · LumbungDB</title>
   {# Tanpa defer: tema dipasang sebelum halaman digambar, supaya tidak berkedip #}
   <script src="{{ static_url('js/theme.js') }}"></script>
+  <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
   <link rel="stylesheet" href="{{ static_url('css/app.css') }}">
   {# Urutan wajib: htmx, app.js, komponen Alpine, Alpine (build CSP) PALING AKHIR #}
   <script defer src="{{ static_url('js/vendor/htmx.min.js') }}"></script>
@@ -20,7 +21,7 @@
 {% block shell %}
 <div class="app">
   <header class="topbar">
-    <a href="/dashboard" class="logo"><span class="logo-mark">L</span>LumbungDB</a>
+    <a href="/dashboard" class="logo"><img class="logo-mark" src="{{ static_url('img/logo-mark.svg') }}" alt="">Lumbung<span class="logo-db">DB</span></a>
     <nav id="nav" aria-label="Menu utama">
       <a class="nav-link{% if active == 'dashboard' %} on{% endif %}" href="/dashboard">Dashboard</a>
       <a class="nav-link{% if active == 'containers' %} on{% endif %}" href="/containers">Container</a>

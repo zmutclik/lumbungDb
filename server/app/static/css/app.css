@@ -146,7 +146,8 @@ p { margin: 0 0 8px; }
 }
 .logo { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 700; font-size: 16px; flex: none; }
 .logo:hover { text-decoration: none; }
-.logo-mark { width: 26px; height: 26px; border-radius: 6px; background: var(--accent-fill); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.logo-mark { width: 28px; height: 28px; display: block; }
+.logo-db { color: #4cc6e0; margin-left: -8px; }
 #nav { display: flex; align-self: stretch; gap: 2px; min-width: 0; }
 .nav-link {
   display: flex; align-items: center; gap: 6px; color: var(--nav-text); padding: 0 12px;
