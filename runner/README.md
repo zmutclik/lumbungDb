@@ -3,7 +3,8 @@
 Program terpisah yang mengerjakan uji restore. Ia mengambil tugas dari LumbungDB, mengunduh file lewat HTTPS,
 memulihkannya di container sementara tanpa jaringan, lalu melaporkan hasil. Data hasil restore tidak keluar dari mesin ini.
 
-- Pasang di server yang berbeda dari server container yang diuji. LumbungDB menolak tugas bila `machine-id` sama.
+- Uji restore boleh di server yang sama dengan container yang diuji: container ujinya tanpa jaringan dan dibuang sesudahnya.
+  Database cadangan dan Naikkan ke production tetap ditolak bila `machine-id` runner sama dengan container sumbernya.
 - Mesin hanya butuh Docker dan akses HTTPS ke LumbungDB. `age`, `mbstream`, dan `mariadb-backup` dijalankan dari image MariaDB.
 - Hasil: **Lolos**, **Gagal** (backup-nya yang bermasalah: file rusak, prepare gagal, tabel tidak terbaca), atau
   **Tidak terlaksana** (runner yang bermasalah: unduhan putus, Docker error, scratch penuh). Yang terakhir tidak dihitung gagal.

@@ -125,12 +125,12 @@ async def test_failed_test_alerts_until_next_passes(world):
     assert f"restoretest:{NAME}" not in found and f"restorerun:{NAME}" not in found
 
 
-async def test_same_server_raises_alert(world):
+async def test_same_server_restore_test_has_no_alert(world):
     await beat(machine="c" * 32)
     async with async_session_factory() as db, db.begin():
         await ensure_row(db, NAME)
         db.add(Heartbeat(container=NAME, server="s", machine_id="c" * 32, info={}))
-    assert f"restoreban:{NAME}" in await alerts()
+    assert not any(key.startswith("restoreban:") for key in await alerts())
 
 
 async def test_runner_alerts_reach_dashboard_alert_list(world):

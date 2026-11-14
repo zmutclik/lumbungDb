@@ -51,7 +51,8 @@ def file_row(backup: Backup) -> dict:
 
 
 async def _same_server(db: AsyncSession, runner: str, container: str) -> bool:
-    """Salinan tidak boleh satu server dengan sumbernya. machine-id, bukan nama, karena nama bisa sama atau berubah."""
+    """Database cadangan tidak boleh satu server dengan sumbernya. machine-id, bukan nama, karena nama bisa sama atau
+    berubah. Uji restore boleh: container ujinya tanpa jaringan dan dibuang sesudahnya."""
     runner_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
     container_machine = await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == container))
     return bool(runner_machine) and runner_machine == container_machine
@@ -74,7 +75,7 @@ async def claim_next(db: AsyncSession, runner: str) -> dict | None:
             .order_by(Job.id).limit(1).with_for_update(skip_locked=True))
         if job is None:
             return None
-        if await _same_server(db, runner, job.container):
+        if job.kind != "restore_test" and await _same_server(db, runner, job.container):
             job.status = STATUS_NOT_RUN
             job.note = "Runner satu server dengan container ini"
             job.finished_at = func.now()

@@ -109,14 +109,13 @@ async def test_no_job_while_nas_has_a_problem(client, world):
     assert await claimed(client, world["one"]) is None
 
 
-async def test_runner_on_same_server_does_not_get_the_job(client, world):
+async def test_runner_on_same_server_still_gets_restore_test(client, world):
+    """Uji restore aman di server yang sama: container ujinya tanpa jaringan dan dibuang sesudahnya."""
     await client.post("/api/heartbeat", headers=world["agent"], json={"server": "db1", "machine_id": "b" * 32})
     await client.post("/api/runner/heartbeat", headers=world["one"], json={"machine_id": "b" * 32})
     job = await new_job()
-    assert await claimed(client, world["one"]) is None
-    async with async_session_factory() as db:
-        saved = await db.get(Job, job.id)
-    assert saved.status == service.STATUS_NOT_RUN and "satu server" in saved.note
+    got = await claimed(client, world["one"])
+    assert got is not None and got["id"] == job.id
 
 
 async def test_download_full_and_resume_with_range(client, world):

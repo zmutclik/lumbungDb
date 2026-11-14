@@ -443,8 +443,6 @@ async def container_tests(name: str, request: Request, user: CurrentUserDep, db:
         untested.append("full")
     if cfg and cfg.test_databases:
         untested += [d for d in known if d not in cfg.test_databases]
-    beat = await db.get(RunnerHeartbeat, cfg.test_runner) if cfg and cfg.test_runner else None
-    machine = context["view"].state.machine_id
     next_run = None
     if expr and expr != "off":
         local_now = datetime.now(view.DISPLAY_TZ).replace(tzinfo=None)
@@ -454,7 +452,6 @@ async def container_tests(name: str, request: Request, user: CurrentUserDep, db:
         settings_row=cfg, schedule_label=cron_lib.label(expr) if expr else "—", next_run=next_run, jobs=jobs,
         results=await runner_view.results_by_job(db, [j.id for j in jobs]), last_job=last_job, last_pass=last_pass,
         untested=untested, kind_label=runner_view.KIND_LABEL,
-        banner_same_server=bool(beat and beat.machine_id and machine and beat.machine_id == machine),
     )
     return render(request, "dashboard/container.html", "runners/_container_tests.html", context)
 

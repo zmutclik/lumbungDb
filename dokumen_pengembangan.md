@@ -537,7 +537,7 @@ Tahap 2 menambah kondisi berikut:
 | Sisa disk scratch runner kurang dari | `ALERT_RUNNER_SCRATCH_FREE_PERCENT` | 15% |
 | Runner dinonaktifkan padahal masih menangani container | tanpa ambang | saat dinonaktifkan |
 | Database cadangan tidak di-restore selama | `ALERT_CADANGAN_LATE` | 2× jadwal restore |
-| Runner satu server dengan container yang ditanganinya | tanpa ambang | sampai container memakai runner lain |
+| Runner cadangan satu server dengan container sumbernya (uji restore boleh satu server) | tanpa ambang | sampai container memakai runner lain |
 | Container hasil Naikkan ke production belum punya runner di server lain | tanpa ambang | sampai runner ditetapkan |
 
 Rantai binlog dinilai per `chain_id` dari tabel `backups`, pada rantai yang terbaru, mulai dari `binlog_start` full terakhir yang lolos uji restore sampai binlog terbaru; bila rantai itu belum punya full yang lolos, mulai dari binlog tertua yang disimpan di rantai itu. Jeda 30 menit memberi waktu bagi upload yang datang terlambat. Alert pulih bila file yang hilang masuk, atau ada full lebih baru yang lolos uji. Nomor yang kembali kecil memulai rantai baru, bukan lompatan.

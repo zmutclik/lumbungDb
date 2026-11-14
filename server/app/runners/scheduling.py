@@ -116,7 +116,7 @@ async def schedule_standby(db: AsyncSession) -> list[int]:
 
 
 async def runner_alerts(db: AsyncSession) -> list[AlertItem]:
-    """Runner mati, uji gagal, uji tidak terlaksana, dan larangan satu server. Dinilai dengan aturan biasa."""
+    """Runner mati, uji gagal, dan uji tidak terlaksana. Dinilai dengan aturan biasa."""
     items: list[AlertItem] = []
     now = await db.scalar(select(func.now()))
     beats = {r.runner: r for r in await db.scalars(select(RunnerHeartbeat))}
@@ -147,13 +147,6 @@ async def runner_alerts(db: AsyncSession) -> list[AlertItem]:
                                    short="Uji restore tidak terlaksana"))
 
     machines = dict((await db.execute(select(Heartbeat.container, Heartbeat.machine_id))).all())
-    for row in await db.scalars(select(ContainerSettings)):
-        beat = beats.get(row.test_runner or "")
-        machine = machines.get(row.container)
-        if row.container in active_agents and beat and beat.machine_id and beat.machine_id == machine:
-            items.append(AlertItem(f"restoreban:{row.container}", "Uji restore", "bad",
-                                   f"Runner uji {row.test_runner} satu server dengan container", row.container,
-                                   short="Runner satu server"))
     items.extend(await _standby_alerts(db, now, beats, machines, active_agents))
     return items
 

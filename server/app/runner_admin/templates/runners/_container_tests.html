@@ -6,7 +6,6 @@
 {% set cfg = settings_row %}
 {% if cfg is none or not cfg.test_runner %}<div class="banner banner-warn"><b>Belum ada runner uji.</b> Backup container ini belum terbukti bisa dipulihkan. Pilih runner di bawah.</div>
 {% elif cfg.test_schedule in (none, "off") %}<div class="banner banner-warn"><b>Jadwal uji mati.</b> Uji hanya berjalan bila dijalankan manual. Uji yang hanya mencakup dump bukan bukti untuk full.</div>{% endif %}
-{% if banner_same_server %}<div class="banner banner-bad"><b>Runner uji satu server dengan container ini.</b> Uji ditolak sampai container memakai runner di server lain.</div>{% endif %}
 <div class="card card-pad">
   <div class="page-head"><div><h2>Pengaturan uji restore</h2></div>
   {% if can_write %}<div class="actions"><button class="btn" hx-get="/containers/{{ view.name }}/uji-restore/edit" hx-target="#modal" hx-swap="innerHTML">Ubah</button>
