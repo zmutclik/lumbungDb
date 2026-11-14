@@ -8,7 +8,7 @@
 {% if ai %}
 <section class="card card-pad" id="ai-summary">
   <h2>Ringkasan AI <span class="pill pill-wait">dibuat AI</span></h2>
-  {% if ai.text %}<div style="white-space: pre-wrap">{{ ai.text }}</div>{% else %}<p class="muted">Ringkasan AI gagal dibuat: {{ ai.error }}. Laporan angka di bawah tidak terpengaruh.</p>{% endif %}
+  {% if ai.text %}<div class="pre-wrap">{{ ai.text }}</div>{% else %}<p class="muted">Ringkasan AI gagal dibuat: {{ ai.error }}. Laporan angka di bawah tidak terpengaruh.</p>{% endif %}
   <p class="hint">{{ ai.provider }} · {{ ai.model }} · {{ ai.created_at | tanggal }}. AI hanya menafsirkan angka dan temuan di laporan ini; tidak mengubah atau menekan alert, dan bisa keliru. Masukan persis yang dikirim tersimpan untuk audit. <button class="btn" hx-post="/reports/{{ report.id }}/ai" hx-swap="none">{{ "Buat ulang" if ai.text else "Coba lagi" }}</button></p>
 </section>
 {% elif ai_enabled %}
@@ -16,7 +16,7 @@
 {% endif %}
 {% for section in report.data.containers %}
 {% set stats = section.stats %}
-<section class="card">
+<section class="card card-pad rep-sec">
   <h2><a href="/containers/{{ section.name }}">{{ section.name }}</a></h2>
   {% if section.findings %}
   <ul>{% for finding in section.findings %}<li class="{{ 'bad' if finding.level == 'bad' else 'warn' }}">{{ finding.text }}</li>{% endfor %}</ul>
