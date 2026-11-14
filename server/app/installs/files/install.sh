@@ -6,6 +6,8 @@
 #   DATA_PORT=3307     port lain, bila port pilihan di dashboard sudah terpakai (hanya pemasangan pertama)
 #   INSTALL_DIR=/path  folder .env dan compose; bawaan <folder tempat perintah dijalankan>/<project>
 #
+# User biasa yang tidak ada di grup docker cukup punya sudo: perintah docker otomatis lewat sudo (password ditanya sekali).
+#
 # Aman dijalankan ulang di mesin dan folder yang sama: .env yang sudah ada tetap dipakai, jadi password tidak berubah.
 set -eu
 umask 077
@@ -15,6 +17,10 @@ step() { printf '==> %s\n' "$*"; }
 random_text() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32; }
 random_user() { printf '%s_' "$1"; LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 12; }
 env_value() { sed -n "s/^$1=//p" "$2" | head -n 1; }
+
+# Semua perintah docker lewat sini; SUDO diisi check_server bila user perlu sudo untuk Docker.
+SUDO=
+docker() { if [ -n "$SUDO" ]; then sudo docker "$@"; else command docker "$@"; fi; }
 
 port_busy() {
     if command -v ss >/dev/null 2>&1; then
@@ -30,7 +36,15 @@ check_server() {
     step "Memeriksa server"
     command -v curl >/dev/null 2>&1 || die "curl tidak ada."
     command -v docker >/dev/null 2>&1 || die "Docker belum terpasang."
-    docker info >/dev/null 2>&1 || die "Tidak bisa memakai Docker. Jalankan sebagai root atau user di grup docker."
+    if ! docker info >/dev/null 2>&1; then
+        [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1 \
+            || die "Tidak bisa memakai Docker. Pastikan Docker berjalan (systemctl status docker)."
+        step "User $(id -un) tidak bisa memakai Docker langsung; memakai sudo"
+        # Password dibaca dari terminal (/dev/tty), bukan stdin, jadi tetap bisa lewat curl | sh.
+        sudo -v || die "sudo gagal. Jalankan sebagai root, atau masukkan user ke grup docker."
+        SUDO=sudo
+        docker info >/dev/null 2>&1 || die "Docker tidak bisa dipakai walau lewat sudo. Pastikan Docker berjalan (systemctl status docker)."
+    fi
     docker compose version >/dev/null 2>&1 || die "Docker Compose v2 belum terpasang."
     [ -s /etc/machine-id ] || die "/etc/machine-id tidak ada; agen memakainya untuk mengenali server ini."
     [ -s /etc/hostname ] || die "/etc/hostname tidak ada; agen memakainya untuk membaca nama server."
@@ -120,7 +134,7 @@ wait_healthy() {
         waited=$((waited + 5))
     done
     docker logs --tail 20 "$NAME" >&2 2>&1 || true
-    die "$NAME belum sehat setelah $waited detik. Log lengkap: docker logs $NAME"
+    die "$NAME belum sehat setelah $waited detik. Log lengkap: ${SUDO:+sudo }docker logs $NAME"
 }
 
 report() {
@@ -134,7 +148,7 @@ $NAME terpasang.
   Password    : ada di $DIR/.env, begitu juga user backup; tidak dikirim ke LumbungDB
 
 Batas bawaan 2 CPU dan 2G memori; ubah DB_CPUS dan DB_MEM_LIMIT di .env, lalu jalankan:
-  docker compose -p $PROJECT -f $DIR/docker-compose.lumbung.yml --env-file $DIR/.env up -d
+  ${SUDO:+sudo }docker compose -p $PROJECT -f $DIR/docker-compose.lumbung.yml --env-file $DIR/.env up -d
 Port terbuka di semua alamat server ini; batasi di firewall hanya untuk IP aplikasi.
 
 Agen mengirim heartbeat dalam 60 detik. Pantau di $BASE_URL/containers/$NAME/verify
