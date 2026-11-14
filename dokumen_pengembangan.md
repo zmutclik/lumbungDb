@@ -234,7 +234,7 @@ Satu proses Python di dalam container MariaDB, yang menjadi bagian dari image `z
 
 ### Runner (tahap 2)
 
-Program terpisah dengan image dan compose sendiri, dipasang di VM atau server khusus. Boleh satu VM dengan LumbungDB, asalkan prosesnya terpisah dan disk scratch-nya sendiri. Uji dan cadangan sebuah container tidak berjalan di server yang sama dengan container itu.
+Program terpisah dengan image dan compose sendiri, dipasang di VM atau server khusus. Boleh satu VM dengan LumbungDB, asalkan prosesnya terpisah dan disk scratch-nya sendiri. Uji dan cadangan sebuah container boleh berjalan di server yang sama dengan container itu; database cadangan di server lain melindungi dari server mati.
 
 Runner tidak punya dashboard atau jadwal sendiri. Ia mengambil tugas dari LumbungDB, mengunduh file lewat HTTPS, menjalankan tugas di mesinnya, lalu mengirim langkah, durasi, dan hasil. Data dari backup tetap di mesin runner.
 
@@ -440,7 +440,7 @@ Perlu ada sebelum runner dipakai (tahap 2):
 
 - **HTTPS wajib,** karena token dan file berisi data pasien lewat jaringan.
 - **Akses file per tugas.** Runner hanya bisa mengunduh file dari tugasnya, dan tiap unduhan dicatat.
-- **Mesin runner diperlakukan seperti produksi.** Scratch dan database cadangan berisi data pasien asli, jadi disknya terenkripsi dan akses adminnya terbatas. Uji dan cadangan sebuah container tidak berjalan di server yang sama dengan container itu; LumbungDB menahan tugas bila `machine-id` runner sama dengan milik container tersebut. Runner yang `machine-id`-nya tidak terbaca tidak diberi tugas.
+- **Mesin runner diperlakukan seperti produksi.** Scratch dan database cadangan berisi data pasien asli, jadi disknya terenkripsi dan akses adminnya terbatas. Uji dan cadangan sebuah container boleh berjalan di server yang sama dengan container itu.
 - **Container uji terisolasi.** Container sementara berjalan dengan `--network none` dan event scheduler mati, supaya hasil restore tidak bisa menghubungi produksi.
 - **Database cadangan tertutup.** Berjalan `read_only`, tanpa event scheduler, dan portnya hanya untuk admin, karena full ikut membawa akun dan password produksi.
 - **Akun runner hanya di dalam container.** `lumbung_runner` hanya bisa masuk dari dalam container, password-nya tetap di disk scratch, dan akun ini dihapus sebelum hasil restore menjadi production.
@@ -537,7 +537,6 @@ Tahap 2 menambah kondisi berikut:
 | Sisa disk scratch runner kurang dari | `ALERT_RUNNER_SCRATCH_FREE_PERCENT` | 15% |
 | Runner dinonaktifkan padahal masih menangani container | tanpa ambang | saat dinonaktifkan |
 | Database cadangan tidak di-restore selama | `ALERT_CADANGAN_LATE` | 2× jadwal restore |
-| Runner cadangan satu server dengan container sumbernya (uji restore boleh satu server) | tanpa ambang | sampai container memakai runner lain |
 | Container hasil Naikkan ke production belum punya runner di server lain | tanpa ambang | sampai runner ditetapkan |
 
 Rantai binlog dinilai per `chain_id` dari tabel `backups`, pada rantai yang terbaru, mulai dari `binlog_start` full terakhir yang lolos uji restore sampai binlog terbaru; bila rantai itu belum punya full yang lolos, mulai dari binlog tertua yang disimpan di rantai itu. Jeda 30 menit memberi waktu bagi upload yang datang terlambat. Alert pulih bila file yang hilang masuk, atau ada full lebih baru yang lolos uji. Nomor yang kembali kecil memulai rantai baru, bukan lompatan.
@@ -821,18 +820,17 @@ Tombol Restore sekarang di tab *Cadangan* menjalankan pemulihan saat itu juga di
 
 Pemindahan ke mesin lain tidak termasuk di sini, karena butuh salin data; itu bagian dari Restore manual.
 
-### Larangan per container
+### Satu server dengan container
 
-Uji restore dan database cadangan sebuah container tidak boleh berjalan di server yang sama dengan container itu, baik terjadwal maupun manual, supaya production dan salinannya tidak hilang bersamaan saat server itu mati.
+Perubahan 14 November 2026: larangan satu server dihapus. Uji restore dan database cadangan boleh berjalan di runner yang satu server dengan containernya. Container uji berjalan tanpa jaringan dan dibuang sesudahnya, jadi aman. Database cadangan di server yang sama ikut hilang bila server itu mati; untuk perlindungan dari server mati, pilih runner di server lain.
 
-- Larangan dinilai per pasangan container dan runner. Runner yang satu server dengan `simrs-utama-2` tidak bisa menguji `simrs-utama-2`, tetapi tetap boleh menangani container lain.
-- Server dibandingkan memakai `machine-id` dari heartbeat, jadi mengganti nama server tidak membuat server baru dan salah ketik tidak mungkin terjadi. Nama dari `/etc/hostname` hanya untuk tampilan.
-- Bila ternyata satu server, larangan berlaku saat heartbeat pertama masuk. Dashboard menampilkan alasannya dan memberi alert sampai container memakai runner lain.
+- Saat LumbungDB memilih runner sendiri (container hasil Naikkan ke production atau Restore manual), runner sehat di server lain didahulukan, lalu runner bermasalah di server lain, lalu runner di server yang sama.
+- Server dibandingkan memakai `machine-id` dari heartbeat. Nama dari `/etc/hostname` hanya untuk tampilan.
 - VM hasil clone bisa punya `machine-id` yang sama. Bila satu `machine-id` muncul dengan dua nama server, dashboard memberi alert.
 
 ### Restore ke server lain
 
-Restore sekarang punya pilihan **Restore di**, berisi runner yang sehat di server selain server container itu. Untuk restore ke server lain, pasang runner di server itu, lalu pilih runner tersebut. Setelah hasilnya lolos, runner itu menjadi runner cadangan, dan database cadangan di runner lama dihapus. Bila gagal, yang lama tetap dipakai. Untuk memindahkan production ke server itu, lanjutkan dengan Naikkan ke production.
+Restore sekarang punya pilihan **Restore di**, berisi runner yang aktif. Untuk restore ke server lain, pasang runner di server itu, lalu pilih runner tersebut. Setelah hasilnya lolos, runner itu menjadi runner cadangan, dan database cadangan di runner lama dihapus. Bila gagal, yang lama tetap dipakai. Untuk memindahkan production ke server itu, lanjutkan dengan Naikkan ke production.
 
 ### Restore manual
 

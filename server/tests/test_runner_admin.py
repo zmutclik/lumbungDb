@@ -195,16 +195,16 @@ async def test_standby_settings_validation(client, world):
         assert await db.get(ContainerSettings, NAME) is None
 
 
-async def test_standby_refuses_runner_on_same_server(client, world):
+async def test_standby_allows_runner_on_same_server(client, world):
     async with async_session_factory() as db, db.begin():
         from app.containers.models import Heartbeat
         machine = (await db.get(Heartbeat, NAME)).machine_id
         db.add(RunnerHeartbeat(runner="runner-1", machine_id=machine))
     headers = post_headers(world)
     saved = await client.put(f"/containers/{NAME}/cadangan", data=standby_form(), headers=headers)
-    assert saved.status_code == 422 and "satu server" in saved.text
+    assert saved.status_code == 200, saved.text
     now = await client.post(f"/containers/{NAME}/cadangan/restore", data={"runner": "runner-1"}, headers=headers)
-    assert now.status_code == 409
+    assert now.status_code == 200, now.text
 
 
 async def test_restore_now_creates_manual_job_and_runner_switch_on_success(client, world):

@@ -607,11 +607,6 @@ async def standby_restore_now(name: str, request: Request, user: CurrentUserDep,
     runner = str(form.get("runner", ""))
     if runner not in runner_registry.entries().active:
         raise HTTPException(status_code=422, detail="Pilih runner yang aktif.")
-    async with db.begin():
-        beat_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
-        own_machine = await container_service.machine_id(db, name)
-    if beat_machine and own_machine and beat_machine == own_machine:
-        raise HTTPException(status_code=409, detail="Runner ini satu server dengan container; pilih runner di server lain.")
     try:
         await standby_service.create_full_job(db, name, runner, requested_by=user.username)
     except runner_service.RunnerError as err:

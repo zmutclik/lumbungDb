@@ -6,7 +6,6 @@ from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backups.models import Backup
-from app.containers.models import Heartbeat
 from app.core.config import settings
 from app.core.database import db_now_plus
 from app.nas import service as nas_service
@@ -50,14 +49,6 @@ def file_row(backup: Backup) -> dict:
     }
 
 
-async def _same_server(db: AsyncSession, runner: str, container: str) -> bool:
-    """Database cadangan tidak boleh satu server dengan sumbernya. machine-id, bukan nama, karena nama bisa sama atau
-    berubah. Uji restore boleh: container ujinya tanpa jaringan dan dibuang sesudahnya."""
-    runner_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
-    container_machine = await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == container))
-    return bool(runner_machine) and runner_machine == container_machine
-
-
 async def claim_next(db: AsyncSession, runner: str) -> dict | None:
     """Tiap runner mengerjakan satu tugas. Batas total memakai penghitungan biasa: pelampauan sesaat hanya
     menambah satu unduhan, sedangkan batas unduhan tetap dijaga terpisah."""
@@ -74,11 +65,6 @@ async def claim_next(db: AsyncSession, runner: str) -> dict | None:
             select(Job).where(Job.runner == runner, Job.status == STATUS_WAITING)
             .order_by(Job.id).limit(1).with_for_update(skip_locked=True))
         if job is None:
-            return None
-        if job.kind != "restore_test" and await _same_server(db, runner, job.container):
-            job.status = STATUS_NOT_RUN
-            job.note = "Runner satu server dengan container ini"
-            job.finished_at = func.now()
             return None
         job.status = STATUS_RUNNING
         job.claimed_at = func.now()

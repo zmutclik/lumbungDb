@@ -10,7 +10,7 @@ from app.agents.dependencies import registry as agents
 from app.alerts.rules import AlertItem
 from app.backup_control import cron
 from app.backups.models import Backup
-from app.containers.models import Container, Heartbeat
+from app.containers.models import Container
 from app.core.config import settings
 from app.runners import service, standby
 from app.runners.dependencies import registry as runners
@@ -146,25 +146,16 @@ async def runner_alerts(db: AsyncSession) -> list[AlertItem]:
                                    "Uji restore tidak terlaksana", job.container, detail=job.note or "",
                                    short="Uji restore tidak terlaksana"))
 
-    machines = dict((await db.execute(select(Heartbeat.container, Heartbeat.machine_id))).all())
-    items.extend(await _standby_alerts(db, now, beats, machines, active_agents))
+    items.extend(await _standby_alerts(db, now, active_agents))
     return items
 
 
-async def _standby_alerts(db: AsyncSession, now: datetime, beats: dict, machines: dict, active_agents) -> list[AlertItem]:
-    """Database cadangan: terhenti, restore gagal, tertinggal, full terlambat, dan runner satu server."""
+async def _standby_alerts(db: AsyncSession, now: datetime, active_agents) -> list[AlertItem]:
+    """Database cadangan: terhenti, restore gagal, tertinggal, dan full terlambat."""
     items: list[AlertItem] = []
     configured = {r.container: r for r in await db.scalars(select(ContainerSettings).where(
         ContainerSettings.standby_enabled.is_(True)))}
     states = {r.container: r for r in await db.scalars(select(Standby))}
-    for container, cfg in configured.items():
-        if container not in active_agents:
-            continue
-        beat = beats.get(cfg.standby_runner or "")
-        if beat and beat.machine_id and beat.machine_id == machines.get(container):
-            items.append(AlertItem(f"standbyban:{container}", "Database cadangan", "bad",
-                                   f"Runner cadangan {cfg.standby_runner} satu server dengan container", container,
-                                   short="Runner cadangan satu server"))
     finished = (service.STATUS_NOT_RUN, "Gagal", "Lolos")
     latest = (select(Job.container, func.max(Job.id).label("id")).where(
         Job.kind.in_(standby.KINDS), Job.status.in_(finished)).group_by(Job.container)).subquery()

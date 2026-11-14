@@ -286,14 +286,14 @@ async def test_register_creates_container_with_runner_on_another_server(client, 
     assert again.status_code == 401 and "selesai" in again.text           # token mati sesudah mendaftar
 
 
-async def test_register_without_other_server_runner_leaves_settings_to_alerts(client, world):  # noqa: F811
+async def test_register_uses_same_server_runner_when_no_other(client, world):  # noqa: F811
     await beat("runner-1", MACHINE)
     await beat("runner-2", MACHINE)           # kedua runner satu mesin dengan server tujuan
     _, token = await make()
     await claim(client, token)
     assert (await register(client, token)).status_code == 200
     async with async_session_factory() as db:
-        assert await db.get(ContainerSettings, "siak-db-2") is None
+        assert (await db.get(ContainerSettings, "siak-db-2")).test_runner == "runner-1"
 
 
 async def test_register_failure_to_write_agents_file_keeps_session_for_rerun(client, world, monkeypatch):  # noqa: F811

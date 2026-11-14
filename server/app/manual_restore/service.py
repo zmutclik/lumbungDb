@@ -310,7 +310,7 @@ async def register(db: AsyncSession, token: str | None, machine_id: str | None, 
             db.add(BackupRequest(container=new_name, kind="full", requested_by=row.created_by, status="Menunggu",
                                  note="Full pertama setelah Restore manual"))
             db.add(ControlLog(container=new_name, actor=row.created_by, action="Dibuat dari Restore manual",
-                              detail=f"dari {source}" + ("" if runner else "; belum ada runner di server lain")))
+                              detail=f"dari {source}" + ("" if runner else "; belum ada runner")))
             row.status, row.step, row.note, row.finished_at = "Selesai", "terdaftar", None, func.now()
     except Exception:
         agents.remove_pending(new_name)       # tokennya belum pernah sampai ke script, jadi barisnya ditarik lagi

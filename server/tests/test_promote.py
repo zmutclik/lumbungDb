@@ -125,12 +125,20 @@ async def test_success_moves_standby_into_new_container(ready):
     assert (run.kind, run.status) == ("naik", "Lolos")
 
 
-async def test_runner_on_same_server_is_never_chosen(ready):
+async def test_runner_on_same_server_is_used_when_no_other(ready):
     await beat("runner-2", MACHINE_A)         # runner-2 ternyata satu mesin dengan runner-1
     job = await create()
     await finish_promote(job)
     async with async_session_factory() as db:
-        assert await db.get(ContainerSettings, "siak-db-2") is None      # tidak ada runner di server lain
+        new = await db.get(ContainerSettings, "siak-db-2")
+    assert (new.test_runner, new.standby_runner) == ("runner-2", "runner-2")    # pemegangnya hanya bila tak ada lain
+
+
+async def test_other_server_preferred_over_same_server(ready):
+    runners.add("runner-3")
+    await beat("runner-3", MACHINE_A)         # runner-3 satu mesin dengan runner-1; runner-2 di server lain
+    async with async_session_factory() as db:
+        assert await promote.pick_runner(db, "runner-1") == "runner-2"
 
 
 async def test_healthy_runner_is_preferred_over_stale_one(ready):

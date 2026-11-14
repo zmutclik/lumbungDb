@@ -2,7 +2,7 @@
 {% macro job_pill(status) %}<span class="pill pill-{{ 'ok' if status == 'Lolos' else 'bad' if status == 'Gagal' else 'warn' if status == 'Tidak terlaksana' else 'wait' }}">{{ status }}</span>{% endmacro %}
 <div {{ ui.live(request) }}>
 {% if request.headers.get("hx-request") %}{% with oob = true %}{% include "dashboard/_nav_count.html" %}{% endwith %}{% endif %}
-<div class="page-head"><div><h1>Runner</h1><div class="sub">Runner mengerjakan uji restore di mesinnya sendiri. Satu tugas per runner. Database cadangan harus di server lain; uji restore boleh di server yang sama.</div></div>
+<div class="page-head"><div><h1>Runner</h1><div class="sub">Runner mengerjakan uji restore di mesinnya sendiri. Satu tugas per runner. Boleh satu server dengan container; database cadangan sebaiknya di server lain supaya tidak ikut hilang bila server itu mati.</div></div>
 <div class="actions"><button class="btn btn-pri" hx-get="/runners/new" hx-target="#modal" hx-swap="innerHTML">Tambah runner</button></div></div>
 {{ ui.nas_banner(nas) }}
 <div class="tbl-wrap"><table class="t"><thead><tr><th>Runner</th><th>Status</th><th>Server</th><th>Heartbeat</th><th>Scratch bebas</th><th>Tugas berjalan</th><th>Container</th><th></th></tr></thead><tbody>

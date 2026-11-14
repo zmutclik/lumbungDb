@@ -74,34 +74,31 @@ async def claim_context(db: AsyncSession, job: Job) -> dict | None:
 
 
 async def pick_runner(db: AsyncSession, current: str) -> str | None:
-    """Runner di server lain dari runner yang memegang container baru."""
+    """Runner untuk container baru; yang di server lain dari runner pemegangnya didahulukan."""
     here = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == current))
     return await pick_runner_for_machine(db, here, exclude=current)
 
 
 async def pick_runner_for_machine(db: AsyncSession, machine_id: str | None, exclude: str | None = None) -> str | None:
-    """Runner yang tidak satu mesin dengan `machine_id`. Yang sehat didahulukan; bila tidak ada yang sehat, runner di
-    server lain yang bermasalah tetap ditetapkan supaya alert runner menjelaskan dampaknya. Mesin yang tidak diketahui
-    berarti tidak ada pilihan yang bisa dijamin."""
-    if not machine_id:
-        return None
+    """Runner untuk container di mesin `machine_id`. Urutan: sehat di server lain, bermasalah di server lain, sehat di
+    server yang sama, lalu sisanya. Runner bermasalah tetap ditetapkan supaya alert runner menjelaskan dampaknya.
+    `exclude` (runner pemegang) hanya dipakai bila tidak ada runner lain."""
     beats = {r.runner: r for r in await db.scalars(select(RunnerHeartbeat))}
     now = await db.scalar(select(func.now()))
     limit = settings.ALERT_HEARTBEAT_MINUTES * 60
-    healthy, other = [], []
-    for name in sorted(runners.entries().active):
+
+    def rank(name: str) -> tuple:
         beat = beats.get(name)
-        if name == exclude or (beat is not None and beat.machine_id == machine_id):
-            continue
-        if beat is not None and (now - beat.at).total_seconds() <= limit:
-            healthy.append(name)
-        else:
-            other.append(name)
-    return (healthy or other or [None])[0]
+        same = beat is None or not machine_id or beat.machine_id == machine_id
+        healthy = beat is not None and (now - beat.at).total_seconds() <= limit
+        return (name == exclude, same, not healthy, name)
+
+    names = sorted(runners.entries().active, key=rank)
+    return names[0] if names else None
 
 
 async def record_success(db: AsyncSession, job: Job) -> None:
-    """Dipanggil di dalam transaksi hasil tugas. Container baru mendapat penetapan runner di server lain dan langsung
+    """Dipanggil di dalam transaksi hasil tugas. Container baru mendapat penetapan runner (server lain didahulukan) dan langsung
     meminta full pertama; database cadangan sumber hilang karena datanya sekarang production."""
     promotion = await db.get(Promotion, job.id)
     if promotion is None:
@@ -127,7 +124,7 @@ async def record_success(db: AsyncSession, job: Job) -> None:
                          note="Full pertama setelah Naikkan ke production"))
     db.add(ControlLog(container=new_name, actor=promotion.requested_by, action="Naik ke production",
                       detail=f"berjalan di runner {job.runner}, port {promotion.port}"
-                             + ("" if runner else "; belum ada runner di server lain")))
+                             + ("" if runner else "; belum ada runner")))
 
 
 async def abandon(db: AsyncSession, job_id: int) -> None:

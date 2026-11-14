@@ -299,14 +299,14 @@ async def test_stale_full_and_disabled_standby(world):
     assert not [k for k in await alert_keys() if k.startswith("standby")]
 
 
-async def test_runner_on_same_server_alerts(world):
+async def test_runner_on_same_server_has_no_alert(world):
     from app.containers.models import Heartbeat
     from app.runners.models import RunnerHeartbeat
     await enable()
     async with async_session_factory() as db, db.begin():
         db.add(Heartbeat(container=NAME, server="s", machine_id="c" * 32, info={}))
         db.add(RunnerHeartbeat(runner="runner-1", machine_id="c" * 32))
-    assert f"standbyban:{NAME}" in await alert_keys()
+    assert not [k for k in await alert_keys() if k.startswith("standbyban:")]
 
 
 # ---------- penghapusan salinan ----------

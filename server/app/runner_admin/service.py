@@ -168,12 +168,6 @@ async def save_standby_settings(db: AsyncSession, container: str, *, enabled: bo
         if not cron.is_valid(value):
             raise SettingsError("Jadwal bukan cron 5 kolom yang valid, atau tidak pernah berjalan.")
     async with db.begin():
-        if runner:
-            beat_machine = await db.scalar(select(RunnerHeartbeat.machine_id).where(RunnerHeartbeat.runner == runner))
-            from app.containers.models import Heartbeat
-            own_machine = await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == container))
-            if beat_machine and own_machine and beat_machine == own_machine:
-                raise SettingsError("Runner ini satu server dengan container; pilih runner di server lain.")
         row = await db.get(ContainerSettings, container, with_for_update=True)
         if row is None:
             row = ContainerSettings(container=container, test_full=True)
