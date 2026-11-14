@@ -1,4 +1,7 @@
+import logging
+
 from sqlalchemy import delete, exists, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +9,9 @@ from app.backup_control.models import ControlLog
 from app.containers.models import Container, Heartbeat
 from app.agents.agents_file import NameRejected
 from app.agents.dependencies import registry
+from app.backups.models import Backup
+
+logger = logging.getLogger(__name__)
 
 
 async def ensure_row(db: AsyncSession, name: str, origin: str = "file") -> None:
@@ -19,6 +25,35 @@ async def sync_with_file(db: AsyncSession) -> None:
     async with db.begin():
         for name in sorted(entries.all_names):
             await ensure_row(db, name)
+    await _drop_unlisted(db)
+
+
+async def _drop_unlisted(db: AsyncSession) -> None:
+    """Container yang barisnya dihapus dari agents.conf (bukan dikomentari) ikut dihapus dari database, selama
+    belum pernah terhubung dan belum punya backup. Yang punya backup dibiarkan: NAS scan akan membuat barisnya lagi
+    dari folder NAS, dan riwayatnya tidak boleh hilang. Dinonaktifkan lewat aplikasi = baris dikomentari, tetap ada."""
+    if not registry.path.exists():
+        return   # config/ tidak terpasang: jangan anggap semua container dihapus
+    async with db.begin():
+        names = set(await db.scalars(select(Container.name)))
+    # File dibaca setelah daftar database: Tambah container menulis file sebelum database, jadi container yang
+    # baru ditambahkan pasti sudah ada di file ini.
+    unlisted = names - registry.entries().all_names
+    for name in sorted(unlisted):
+        try:
+            async with db.begin():
+                if await has_heartbeat(db, name) or await db.scalar(select(exists().where(Backup.container == name))):
+                    continue
+                await _forget(db, name)
+        except IntegrityError:
+            logger.info("container_unlisted_kept", extra={"container": name})   # masih dirujuk data lain
+            continue
+        logger.info("container_unlisted_removed", extra={"container": name})
+
+
+async def _forget(db: AsyncSession, name: str) -> None:
+    await db.execute(delete(ControlLog).where(ControlLog.container == name))   # hanya catatan perintah pasang
+    await db.execute(delete(Container).where(Container.name == name))
 
 
 async def known_names(db: AsyncSession) -> set[str]:
@@ -58,8 +93,7 @@ async def cancel_pending(db: AsyncSession, name: str) -> bool:
     if not registry.remove_pending(name):
         return False
     async with db.begin():
-        await db.execute(delete(ControlLog).where(ControlLog.container == name))   # hanya catatan perintah pasang
-        await db.execute(delete(Container).where(Container.name == name))
+        await _forget(db, name)
     return True
 
 

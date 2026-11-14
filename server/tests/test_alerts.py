@@ -259,3 +259,40 @@ async def test_hung_probe_is_not_restarted_and_recovers(tmp_path, monkeypatch):
     nas.timeout = 5
     assert (await nas.check()).state == "ok"
     assert sys.executable in started[0][0]
+
+
+async def test_container_removed_from_file_is_dropped_unless_it_has_history():
+    from app.backups.models import Backup
+    from app.containers.models import Container, Heartbeat
+    from app.containers.service import sync_with_file
+    for name in ("hapus", "pernah", "punya", "mati", "tetap"):
+        registry.add(name)
+    async with async_session_factory() as db:
+        await sync_with_file(db)
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container="pernah", info={}))
+        db.add(Backup(container="punya", kind="fullbackup", relpath="f", stored_path="f", size=1, sha256="a" * 64,
+                      plain_sha256="b" * 64, backup_at=NOW))
+    registry.disable("mati")
+    text = registry.path.read_text()
+    registry.path.write_text("".join(
+        line for line in text.splitlines(keepends=True) if line.split("=")[0].strip() not in ("hapus", "pernah", "punya")
+    ))
+    async with async_session_factory() as db:
+        await sync_with_file(db)
+    async with async_session_factory() as db:
+        names = set(await db.scalars(select(Container.name)))
+    assert names == {"pernah", "punya", "mati", "tetap"}
+
+
+async def test_missing_agents_file_drops_nothing():
+    from app.containers.models import Container
+    from app.containers.service import sync_with_file
+    registry.add("ada")
+    async with async_session_factory() as db:
+        await sync_with_file(db)
+    registry.path.unlink()
+    async with async_session_factory() as db:
+        await sync_with_file(db)
+    async with async_session_factory() as db:
+        assert set(await db.scalars(select(Container.name))) == {"ada"}

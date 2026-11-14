@@ -60,6 +60,10 @@ Buka Tambah container di dashboard, isi nama dan port, lalu jalankan perintah `c
 
 Container lama yang volumenya harus tetap terpakai memakai bagian *Container lama atau pasang manual* di halaman yang sama. Bila `mariadb/docker-compose.lumbung.yml` berubah, salin juga ke `server/app/installs/files/`; test gagal bila keduanya berbeda.
 
+## Menghapus container dari agents.conf
+
+Memberi `#` di depan baris = container **Nonaktif**, tetap tampil beserta riwayatnya. Menghapus barisnya = container ikut dihapus dari daftar dalam satu putaran worker (sekitar satu menit), **hanya bila** agennya belum pernah mengirim heartbeat dan belum punya backup. Container yang sudah punya backup tetap tampil sebagai Nonaktif, karena riwayat dan folder NAS-nya masih ada.
+
 ## Merotasi token agen
 
 Lakukan bila token sebuah container dicurigai bocor. Selama langkah 2 sampai 5, cron di container tetap membuat backup; file terkirim setelah token baru terpasang.
