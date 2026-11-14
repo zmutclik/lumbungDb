@@ -1,12 +1,12 @@
 <div>
   <h3>Runner {{ name }} dibuat</h3>
-  <p class="hint">Salin sekarang; token tidak ditampilkan lagi. Isi di <code>.env.runner</code> pada mesin runner.</p>
-  <div class="field"><label>Isi <code>.env.runner</code></label><div class="copy" x-data="copyBox"><pre x-ref="source">LUMBUNG_URL={{ url }}
-LUMBUNG_RUNNER_TOKEN={{ token }}
-SCRATCH_DIR=/srv/lumbung-scratch
-AGE_IDENTITY_FILE=/etc/lumbung/age-runner.key
-MARIADB_IMAGE=zmutclik/mariadb:lumbungdb-12.3-a1</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
-  <div class="field"><label>Jalankan di mesin runner</label><div class="copy" x-data="copyBox"><pre x-ref="source">docker compose -f docker-compose.runner.yml --env-file .env.runner up -d</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
-  <p class="hint">Mesin runner butuh Docker, akses HTTPS ke LumbungDB, disk scratch, dan kunci privat age milik runner. Pasang di server yang bukan server container yang diuji.</p>
+  {% if install_command %}{% include "runners/_install_command.html" %}
+  {% else %}<div class="msg-err">✕ Perintah pasang gagal dibuat. Pakai isi manual di bawah, atau buat perintah dari menu ⋮ runner ini di halaman Runner.</div>{% endif %}
+  <details class="wiz-manual"{% if not install_command %} open{% endif %}><summary>Pasang manual</summary>
+  <div class="once"><b>Token runner hanya ditampilkan sekali.</b> Baris <code>{{ name }} = …</code> sudah ditambahkan ke <code>config/runners.conf</code>. Abaikan bagian ini bila memakai perintah di atas.</div>
+  <div class="field"><label>Isi <code>.env.runner</code></label><div class="copy" x-data="copyBox"><pre x-ref="source">{{ env }}</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+  <div class="field"><label>Salin <code>docker-compose.runner.yml</code> ke mesin runner, lalu jalankan</label><div class="copy" x-data="copyBox"><pre x-ref="source">docker compose -f docker-compose.runner.yml --env-file .env.runner up -d</pre><button class="btn" type="button" x-on:click="copy" x-text="label">Salin</button></div></div>
+  <p class="hint">Mesin runner butuh Docker, akses HTTPS ke LumbungDB, disk scratch, dan kunci privat age milik runner.</p>
+  </details>
   <div class="modal-actions"><a class="btn btn-pri" href="/runners">Selesai</a></div>
 </div>

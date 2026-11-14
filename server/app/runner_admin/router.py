@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -9,7 +10,10 @@ from app.auth.dependencies import CurrentUserDep, require_csrf, require_ready, r
 from app.core.database import DbSession
 from app.core.templating import render, templates
 from app.runner_admin import service
+from app.runner_installs import service as install_service
 from app.runners.dependencies import registry as runners
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     tags=["runner-admin"], dependencies=[Depends(require_csrf), Depends(require_ready), Depends(require_role("admin"))],
@@ -41,8 +45,12 @@ async def new_runner_dialog(request: Request, user: CurrentUserDep):
     return templates.TemplateResponse(request=request, name="runners/_new_dialog.html", context={"name": "", "error": None})
 
 
+def _url(request: Request) -> str:
+    return f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+
+
 @router.post("/runners")
-async def create_runner(request: Request, user: CurrentUserDep):
+async def create_runner(request: Request, user: CurrentUserDep, db: DbSession):
     form = await request.form()
     name = str(form.get("name", "")).strip()[:100]
     error = runners.name_error(name)
@@ -58,8 +66,30 @@ async def create_runner(request: Request, user: CurrentUserDep):
         return templates.TemplateResponse(
             request=request, name="runners/_new_dialog.html", context={"name": name, "error": error},
             status_code=422, headers={"HX-Retarget": "#modal", "HX-Reswap": "innerHTML"})
+    url = _url(request)
+    # Token runner sudah tersimpan di runners.conf; bila perintah pasang gagal dibuat, isi manual tetap tampil dan
+    # perintah baru bisa dibuat dari halaman Runner.
+    install_command = expires_at = None
+    try:
+        install_token, expires_at = await install_service.create_command(db, name, user.username)
+        install_command = install_service.install_command(url, install_token)
+    except Exception:
+        logger.exception("runner_install_command_failed", extra={"runner": name})
     return templates.TemplateResponse(request=request, name="runners/_new_token.html", context={
-        "name": name, "token": token, "url": f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"})
+        "name": name, "env": install_service.env_text(token, url), "install_command": install_command,
+        "expires_at": expires_at, "base_url": url})
+
+
+@router.post("/runners/{name}/install-command")
+async def renew_install_command(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    try:
+        install_token, expires_at = await install_service.renew_command(db, name, user.username)
+    except install_service.InstallError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    url = _url(request)
+    return templates.TemplateResponse(request=request, name="runners/_install_renewed.html", context={
+        "name": name, "install_command": install_service.install_command(url, install_token),
+        "expires_at": expires_at, "base_url": url})
 
 
 @router.get("/runners/{name}/disable")
@@ -70,7 +100,7 @@ async def disable_dialog(name: str, request: Request, user: CurrentUserDep):
 
 
 @router.post("/runners/{name}/disable")
-async def disable_runner(name: str, user: CurrentUserDep):
+async def disable_runner(name: str, user: CurrentUserDep, db: DbSession):
     if name not in runners.entries().active:
         raise HTTPException(status_code=404)
     try:
@@ -78,4 +108,5 @@ async def disable_runner(name: str, user: CurrentUserDep):
     except AgentsFileWriteError as err:
         status = 409 if isinstance(err, AgentsFileInvalid) else 500   # 5xx tidak menampilkan pesan
         raise HTTPException(status_code=status, detail=f"{err} Runner belum dinonaktifkan.") from err
+    await install_service.forget(db, name)
     return _done(f"Runner {name} dinonaktifkan.")

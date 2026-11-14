@@ -17,7 +17,7 @@
   <td>{% if beat and beat.scratch_free is not none %}{{ beat.scratch_free | filesize }} dari {{ beat.scratch_total | filesize }}{% else %}—{% endif %}</td>
   <td>{% if row.running %}<a href="/containers/{{ row.running.container }}/uji-restore">{{ row.running.container }}</a><br><span class="muted small">{{ row.running.step or "mulai" }}</span>{% else %}—{% endif %}</td>
   <td>{% for name in row.containers %}<a href="/containers/{{ name }}/uji-restore">{{ name }}</a>{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
-  <td>{% if row.active %}<details class="row-menu"><summary aria-label="Aksi untuk {{ row.name }}">⋮</summary><div class="menu-pop"><button class="danger" hx-get="/runners/{{ row.name }}/disable" hx-target="#modal" hx-swap="innerHTML">Nonaktifkan</button></div></details>{% endif %}</td>
+  <td>{% if row.active %}<details class="row-menu"><summary aria-label="Aksi untuk {{ row.name }}">⋮</summary><div class="menu-pop">{% if not beat %}<button hx-post="/runners/{{ row.name }}/install-command" hx-target="#modal" hx-swap="innerHTML" hx-confirm="Buat perintah pasang baru untuk {{ row.name }}? Perintah sebelumnya langsung tidak berlaku.">Perintah pasang</button>{% endif %}<button class="danger" hx-get="/runners/{{ row.name }}/disable" hx-target="#modal" hx-swap="innerHTML">Nonaktifkan</button></div></details>{% endif %}</td>
 </tr>
 {% else %}
 <tr><td colspan="8"><div class="empty"><b>Belum ada runner</b>Tambah runner, lalu pasang di mesin yang bukan server database yang diuji.</div></td></tr>

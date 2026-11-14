@@ -1,8 +1,12 @@
 """Dashboard runner: halaman Runner, token sekali tampil, dan tab Uji restore."""
+import re
+from pathlib import Path
+
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.agents.dependencies import registry as agents
+from app.core.config import settings
 from app.core.database import async_session_factory
 from app.runners.dependencies import registry as runners
 from app.runners.models import ContainerSettings, Job, RestoreTest, RunnerHeartbeat
@@ -300,3 +304,74 @@ async def test_manual_create_errors_return_form_with_message(client, world):
     assert no_full.status_code == 422 and "Pilih full" in no_full.text
     assert (await client.post("/containers/tidak-ada/restore-manual", data=manual_form(full=await full_id()),
                               headers=headers)).status_code == 404
+
+
+# ---------- perintah pasang runner ----------
+def _install_token(html: str) -> str:
+    return re.search(r"INSTALL_TOKEN=(lmn_[\w-]+)", html).group(1)
+
+
+async def _claim(client, token, machine="a" * 32):
+    return await client.post("/api/install/runner-session", headers={"X-Install-Token": token, "X-Machine-Id": machine})
+
+
+async def test_runner_install_command_flow(client, world):
+    resp = await client.post("/runners", data={"name": "runner-dc2"}, headers=post_headers(world))
+    assert resp.status_code == 200, resp.text
+    assert "curl -fsSL http://test/install-runner.sh | LUMBUNG_URL=http://test INSTALL_TOKEN=lmn_" in resp.text
+    runner_token = runners.entries().active["runner-dc2"]
+    install_token = _install_token(resp.text)
+
+    claimed = await _claim(client, install_token)
+    assert claimed.status_code == 200, claimed.text
+    lines = claimed.text.splitlines()
+    for line in ("RUNNER_NAME=runner-dc2", f"LUMBUNG_RUNNER_TOKEN={runner_token}", "LUMBUNG_URL=http://test",
+                 f"RUNNER_IMAGE=zmutclik/lumbungdb-runner:{settings.RUNNER_VERSION_LATEST}",
+                 f"MARIADB_IMAGE=zmutclik/mariadb:lumbungdb-{settings.IMAGE_TAG_DEFAULT}",
+                 f"LUMBUNG_AGE_RECIPIENTS={settings.BACKUP_AGE_RECIPIENTS}"):
+        assert line in lines, line
+
+    assert (await _claim(client, install_token)).status_code == 200      # jalankan ulang di mesin yang sama
+    assert (await _claim(client, install_token, "b" * 32)).status_code == 403
+    assert (await _claim(client, "lmn_salah")).status_code == 401
+    assert (await _claim(client, "lmi_" + install_token[4:])).status_code == 401   # token pasang agen ditolak
+    assert (await _claim(client, install_token, "bukan machine id")).status_code == 422
+    assert install_token not in (await client.get("/runners")).text
+
+
+async def test_runner_install_command_expires_renews_and_dies(client, world):
+    resp = await client.post("/runners", data={"name": "runner-dc2"}, headers=post_headers(world))
+    old = _install_token(resp.text)
+    async with async_session_factory() as db, db.begin():
+        await db.execute(text("UPDATE runner_installs SET expires_at = NOW() - INTERVAL 1 SECOND"))
+    expired = await _claim(client, old)
+    assert expired.status_code == 410 and "kedaluwarsa" in expired.text
+
+    assert "Perintah pasang</button>" in (await client.get("/runners")).text
+    renewed = await client.post("/runners/runner-dc2/install-command", headers=post_headers(world))
+    assert renewed.status_code == 200, renewed.text
+    assert runners.entries().active["runner-dc2"] not in renewed.text     # token runner hanya tampil sekali
+    new = _install_token(renewed.text)
+    assert (await _claim(client, old)).status_code == 401
+    assert (await _claim(client, new, "b" * 32)).status_code == 200
+
+    async with async_session_factory() as db, db.begin():
+        db.add(RunnerHeartbeat(runner="runner-dc2", server="vm-uji", machine_id="b" * 32, version="r1"))
+    assert (await _claim(client, new, "b" * 32)).status_code == 410
+    assert (await client.post("/runners/runner-dc2/install-command", headers=post_headers(world))).status_code == 409
+
+
+async def test_runner_install_command_dies_when_disabled(client, world):
+    resp = await client.post("/runners", data={"name": "runner-dc2"}, headers=post_headers(world))
+    token = _install_token(resp.text)
+    assert (await client.post("/runners/runner-dc2/disable", headers=post_headers(world))).status_code == 200
+    assert (await _claim(client, token)).status_code == 401
+    assert (await client.post("/runners/runner-dc2/install-command", headers=post_headers(world))).status_code == 404
+
+
+async def test_runner_install_files_are_public_and_compose_matches(client):
+    script = await client.get("/install-runner.sh")
+    assert script.status_code == 200 and script.text.startswith("#!/bin/sh") and "lmn_" in script.text
+    compose = await client.get("/install/docker-compose.runner.yml")
+    reference = Path(__file__).resolve().parents[2] / "runner" / "docker-compose.runner.yml"
+    assert compose.status_code == 200 and compose.text == reference.read_text()

@@ -1,0 +1,29 @@
+# Runner di mesin terpisah dari server container yang diuji.
+#   docker compose -f docker-compose.runner.yml --env-file .env.runner up -d
+# SCRATCH_DIR dipasang dengan path yang sama di host dan di container: runner memberi path itu ke `docker run -v`
+# yang dieksekusi daemon di host.
+services:
+  runner:
+    image: ${RUNNER_IMAGE:?isi RUNNER_IMAGE}
+    restart: unless-stopped
+    # Mengganti database cadangan dan naikkan ke production ditunggu selesai saat docker stop (lihat README)
+    stop_grace_period: 15m
+    environment:
+      LUMBUNG_URL: ${LUMBUNG_URL:?isi LUMBUNG_URL}
+      LUMBUNG_RUNNER_TOKEN: ${LUMBUNG_RUNNER_TOKEN:?isi LUMBUNG_RUNNER_TOKEN}
+      SCRATCH_DIR: ${SCRATCH_DIR:?isi SCRATCH_DIR}
+      AGE_IDENTITY_FILE: ${AGE_IDENTITY_FILE:?isi AGE_IDENTITY_FILE}
+      MARIADB_IMAGE: ${MARIADB_IMAGE:?isi MARIADB_IMAGE}
+      # Database cadangan: alamat dan port awal yang dibuka di mesin ini
+      STANDBY_BIND_ADDRESS: ${STANDBY_BIND_ADDRESS:-127.0.0.1}
+      STANDBY_PORT_BASE: ${STANDBY_PORT_BASE:-33100}
+      # Naikkan ke production: container baru dan datanya ada di PROMOTE_DIR (bawaan <SCRATCH_DIR>/promoted)
+      PROMOTE_DIR: ${PROMOTE_DIR:-}
+      PROMOTE_MEMORY: ${PROMOTE_MEMORY:-2g}
+      PROMOTE_CPUS: ${PROMOTE_CPUS:-2}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SCRATCH_DIR}:${SCRATCH_DIR}
+      - ${AGE_IDENTITY_FILE}:${AGE_IDENTITY_FILE}:ro
+      - /etc/hostname:/lumbung/server/hostname:ro
+      - /etc/machine-id:/lumbung/server/machine-id:ro

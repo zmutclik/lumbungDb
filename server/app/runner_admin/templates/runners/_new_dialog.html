@@ -3,6 +3,6 @@
   <div class="field"><label for="runner-name">Nama runner</label>
     <input id="runner-name" name="name" value="{{ name }}" maxlength="64" autocomplete="off" spellcheck="false" autofocus placeholder="mis. runner-dc2"></div>
   {% if error %}<div class="msg-err">✕ {{ error }}</div>{% endif %}
-  <p class="hint">Nama dan token disimpan di <code>config/runners.conf</code>, terpisah dari token agen. Token ditampilkan sekali.</p>
+  <p class="hint">Nama dan token disimpan di <code>config/runners.conf</code>, terpisah dari token agen. Sesudahnya tampil perintah pasang satu baris untuk mesin runner.</p>
   <div class="modal-actions"><button class="btn" type="button" data-close-modal>Batal</button><button class="btn btn-pri" type="submit">Buat token</button></div>
 </form>

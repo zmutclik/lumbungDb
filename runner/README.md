@@ -10,7 +10,20 @@ memulihkannya di container sementara tanpa jaringan, lalu melaporkan hasil. Data
 - Unduhan dilanjutkan dari byte terakhir bila terputus. Saat start, runner membuang container berlabel
   `lumbung.runner=1` dan folder `job-*` sisa tugas yang terputus.
 
-Pasang: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
+Pasang: buka **Tambah runner** di halaman Runner, lalu jalankan perintah yang tampil di mesin runner:
+
+```bash
+curl -fsSL https://<lumbung>/install-runner.sh | LUMBUNG_URL=https://<lumbung> INSTALL_TOKEN=lmn_xxx sh
+```
+
+Kunci privat age runner harus sudah ada di `/etc/lumbung/age-runner.key` (izin 600; lokasi lain lewat
+`AGE_IDENTITY_FILE=/path` sebelum `sh`). Script memeriksa kunci itu salah satu penerima `BACKUP_AGE_RECIPIENTS`, menulis
+`.env.runner` di `lumbung-runner/` pada folder tempat perintah dijalankan, lalu menjalankan runner dengan project
+`lumbung-runner`. Perintah berlaku `INSTALL_COMMAND_HOURS`, terikat ke mesin pertama yang memakainya, dan mati setelah
+runner mengirim heartbeat; perintah baru ada di menu ⋮ runner yang belum terhubung. Bila
+`docker-compose.runner.yml` berubah, salin juga ke `server/app/runner_installs/files/`; test gagal bila keduanya berbeda.
+
+Pasang manual: salin `.env.runner.example` jadi `.env.runner`, isi, lalu `docker compose -f docker-compose.runner.yml --env-file .env.runner up -d`.
 
 ## Update
 
