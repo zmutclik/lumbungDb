@@ -30,11 +30,11 @@ cp config/agents.conf.example config/agents.conf && chmod 600 config/agents.conf
 touch /mnt/lumbungdb/.lumbung-mounted        # penanda mount, di NFS
 mkdir -p deploy/certs                        # fullchain.pem dan privkey.pem
 
-docker compose up -d db
-docker compose run --rm web alembic upgrade head                     # sekali per deploy, sebelum up
 docker compose run --rm web python -m app.auth.cli create-user admin # akun pertama; password dari prompt
 docker compose up -d --build
 ```
+
+Skema database dibuat dan di-upgrade otomatis oleh service `migrate` sebelum `web` dan `worker` start, termasuk saat `docker compose run`. Bila skema di database lebih baru dari kode di image (misalnya setelah rollback image), `migrate` berhenti dengan pesan jelas dan `web`/`worker` tidak start; downgrade tidak pernah otomatis. Log-nya: `docker compose logs migrate`.
 
 Folder `config/` harus bisa ditulis oleh `LUMBUNG_UID`, karena Tambah container menulis `agents.conf` lewat rename. Pasang pemeriksa `GET /api/watchdog` dari luar VM: 503 berarti pengecek alert berhenti.
 

@@ -1,9 +1,8 @@
 # LumbungDB. Pasang di VM khusus, di luar mesin fisik server database.
 # Pemasangan pertama:
-#   docker compose up -d db
-#   docker compose run --rm web alembic upgrade head          # sekali per deploy, sebelum up
-#   docker compose run --rm web python -m app.auth.cli create-user admin
+#   docker compose run --rm web python -m app.auth.cli create-user admin   # db dan migrasi ikut jalan otomatis
 #   docker compose up -d --build
+# Migrasi skema berjalan otomatis lewat service `migrate` tiap `up`, sebelum web dan worker start.
 x-logging: &default-logging
   driver: json-file
   options: {max-size: "20m", max-file: "5"}
@@ -25,6 +24,7 @@ x-app: &app
     - ./config:/config
   depends_on:
     db: {condition: service_healthy}
+    migrate: {condition: service_completed_successfully}
 
 services:
   db:
@@ -46,6 +46,16 @@ services:
       retries: 6
     restart: unless-stopped
     logging: *default-logging
+
+  # Sekali jalan: buat tabel bila database kosong, upgrade bila skema lebih lama. Gagal → web dan worker tidak start.
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.core.migrate"]
+    environment:
+      DATABASE_URL: mysql+asyncmy://lumbung:${DB_PASSWORD}@db:3306/lumbung
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
 
   web:
     <<: *app
