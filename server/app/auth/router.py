@@ -1,4 +1,5 @@
 import hmac
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +25,19 @@ from app.core.templating import render, templates
 router = APIRouter(tags=["auth"])
 
 LOGIN_CSRF_COOKIE = "login_csrf"
+
+logger = logging.getLogger(__name__)
+
+
+def _login_csrf_error(cookie_token: str) -> str:
+    if not cookie_token:
+        # Penyebab tersering: halaman dibuka lewat http:// padahal cookie bertanda Secure, jadi browser tidak menyimpannya.
+        if settings.COOKIE_SECURE:
+            return ("Browser tidak mengirim cookie login. Buka halaman ini lewat https:// (bukan http:// atau "
+                    "IP server langsung) dan pastikan cookie tidak diblokir.")
+        return "Browser tidak mengirim cookie login. Pastikan cookie untuk situs ini tidak diblokir."
+    # Cookie ada tapi tidak cocok: biasanya form lama, misalnya halaman login dibuka di tab lain sesudahnya.
+    return "Halaman login sudah kedaluwarsa. Silakan masuk lagi."
 
 
 def _login_page(request: Request, error: str | None = None, status_code: int = 200):
@@ -60,7 +74,10 @@ async def login_submit(request: Request, db: DbSession):
     cookie_token = request.cookies.get(LOGIN_CSRF_COOKIE, "")
     form_token = form.get("csrf_token")
     if not cookie_token or not isinstance(form_token, str) or not hmac.compare_digest(cookie_token, form_token):
-        raise HTTPException(status_code=403, detail="Token CSRF tidak valid.")
+        logger.warning("login CSRF gagal: cookie %s, skema %s, host %s",
+                       "ada" if cookie_token else "tidak ada", request.url.scheme, request.headers.get("host"))
+        # Form baru dengan token baru, supaya user bisa langsung mencoba lagi dan tahu penyebabnya.
+        return _login_page(request, _login_csrf_error(cookie_token), status_code=403)
     if request.headers.get("origin") and not origin_matches(request):
         raise HTTPException(status_code=403, detail="Asal permintaan tidak dikenal.")
 

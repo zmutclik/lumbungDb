@@ -44,6 +44,22 @@ async def test_login_requires_double_submit_csrf(client):
     await make_user()
     resp = await client.post("/login", data={"username": "alice", "password": "s3cret-pass-12", "csrf_token": "x"})
     assert resp.status_code == 403
+    assert "cookie login" in resp.text                                 # cookie tidak terkirim, bukan pesan CSRF mentah
+    assert resp.cookies.get("login_csrf")                              # form baru, bisa langsung dicoba lagi
+
+    page = await client.get("/login")
+    resp = await client.post("/login", data={"username": "alice", "password": "s3cret-pass-12", "csrf_token": "x"},
+                             cookies={"login_csrf": page.cookies["login_csrf"]})
+    assert resp.status_code == 403 and "kedaluwarsa" in resp.text
+    assert SESSION_COOKIE not in resp.cookies
+
+
+def test_login_csrf_error_points_to_https_when_cookie_secure(monkeypatch):
+    from app.auth.router import _login_csrf_error
+    monkeypatch.setattr(settings, "COOKIE_SECURE", True)
+    assert "https://" in _login_csrf_error("")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", False)
+    assert "https://" not in _login_csrf_error("")
 
 
 async def test_wrong_password_then_rate_limited(client):
