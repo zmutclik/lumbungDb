@@ -28,11 +28,18 @@ Isi `BACKUP_AGE_RECIPIENTS` dengan kedua baris `# public key:` dari file itu, di
 cp .env.example .env && chmod 600 .env       # isi BACKUP_ROOT, DB_PASSWORD, SECRET_KEY, BACKUP_AGE_RECIPIENTS, Telegram
 cp config/agents.conf.example config/agents.conf && chmod 600 config/agents.conf
 touch /mnt/lumbungdb/.lumbung-mounted        # penanda mount, di NFS
-mkdir -p deploy/certs                        # fullchain.pem dan privkey.pem
 
 docker compose run --rm web python -m app.auth.cli create-user admin # akun pertama; password dari prompt
 docker compose up -d --build
 ```
+
+SSL tidak dipasang di LumbungDB. Secara default (`NGINX_CONF=nginx-proxy.conf`) nginx hanya melayani HTTP di port `HTTP_PORT`, dan SSL dipasang di reverse proxy yang Anda kelola di depan VM ini. Proxy depan itu wajib:
+
+- melayani HTTPS dengan sertifikat yang dipercaya umum, karena agen dan runner memverifikasinya;
+- meneruskan Host asli dan `X-Forwarded-For` ke `http://<VM>:<HTTP_PORT>`;
+- tidak membatasi ukuran body, dengan timeout minimal 1 jam untuk `/api/upload/`, `/api/runner/jobs/`, dan `/api/manual/files/`, karena file backup bisa puluhan GB.
+
+Isi `TLS_PROXY_IP` di `.env` dengan IP proxy depan supaya rate limit login memakai IP asli user. Akses langsung ke `http://<VM>` tanpa proxy ditolak saat login, karena app menganggap browser selalu memakai https. Ingin SSL dipasang langsung di VM ini? Pakai `NGINX_CONF=nginx-tls.conf` dan letakkan `fullchain.pem` dan `privkey.pem` di `deploy/certs/`.
 
 Skema database dibuat dan di-upgrade otomatis oleh service `migrate` sebelum `web` dan `worker` start, termasuk saat `docker compose run`. Bila skema di database lebih baru dari kode di image (misalnya setelah rollback image), `migrate` berhenti dengan pesan jelas dan `web`/`worker` tidak start; downgrade tidak pernah otomatis. Log-nya: `docker compose logs migrate`.
 

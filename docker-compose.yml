@@ -81,11 +81,17 @@ services:
   nginx:
     image: nginx:1.27-alpine
     volumes:
-      - ./deploy/${NGINX_CONF:-nginx-tls.conf}:/etc/nginx/conf.d/default.conf:ro
+      # Lewat templates: envsubst mengisi ${TLS_PROXY_IP} di nginx-proxy.conf, lalu menulis conf.d/default.conf
+      - ./deploy/${NGINX_CONF:-nginx-proxy.conf}:/etc/nginx/templates/default.conf.template:ro
       - ./deploy/http-common.inc:/etc/nginx/lumbung/http-common.inc:ro
       - ./deploy/locations.inc:/etc/nginx/lumbung/locations.inc:ro
       - ./server/app/static:/srv/static:ro
+      # Hanya dipakai nginx-tls.conf
       - ${TLS_CERT_DIR:-./deploy/certs}:/etc/nginx/certs:ro
+    environment:
+      # IP atau CIDR proxy TLS di depan VM ini (nginx-proxy.conf). Default tidak mempercayai siapa pun.
+      TLS_PROXY_IP: ${TLS_PROXY_IP:-127.0.0.1}
+      NGINX_ENVSUBST_FILTER: "^TLS_PROXY_IP$"
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"

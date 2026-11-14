@@ -3,16 +3,14 @@
 
     proxy_http_version 1.1;
     proxy_set_header Connection "";
-    # Ada proxy lain di depan nginx? Aktifkan real_ip agar $remote_addr = IP asli user.
-    # set_real_ip_from <IP proxy>;
-    # real_ip_header X-Forwarded-For;
-    # real_ip_recursive on;
+    # Proxy lain di depan nginx: real_ip diatur di nginx-proxy.conf.
 
     # $http_host, bukan $host: membawa port, karena pemeriksaan Origin membandingkan alamat lengkap yang dilihat browser.
     proxy_set_header Host $http_host;
     # TIMPA, jangan tambah: X-Forwarded-For kiriman client tidak boleh sampai ke app (rate limit login).
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    # Skema yang dilihat browser; diisi tiap file nginx-*.conf ($scheme, atau https di belakang proxy TLS).
+    proxy_set_header X-Forwarded-Proto $lumbung_proto;
     # Request ID dibuat nginx, bukan diteruskan dari client.
     proxy_set_header X-Request-ID $request_id;
     proxy_read_timeout 30s;
