@@ -1,12 +1,12 @@
 """Menyimpan metrik dari heartbeat. Dipanggil di dalam transaksi heartbeat."""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backup_control.schemas import MetricsIn
-from app.reports.models import NAME, Metric, MetricCounter, StatusSample
+from app.reports.models import NAME, DailyMetric, Metric, MetricCounter, StatusSample
 
 # Nama di SHOW GLOBAL STATUS → nama metrik
 COUNTER_NAMES = {
@@ -22,7 +22,7 @@ SAMPLE_NAMES = (
     "Slow_queries", "Innodb_buffer_pool_read_requests", "Innodb_buffer_pool_reads", "Threads_connected",
     "Threads_running",
 )
-SAMPLE_RETENTION = timedelta(hours=24)
+SAMPLE_RETENTION = timedelta(hours=50)   # > 48 jam: hari kemarin plus satu cuplikan sebelum tengah malamnya
 SIZE_DB = "size_db:"
 SIZE_TABLE = "size_table:"
 
@@ -103,9 +103,11 @@ async def ingest(db: AsyncSession, container: str, metrics: MetricsIn | None, di
                 await _gauge(db, container, at, f"{SIZE_TABLE}{item['database']}.{item['table']}", item["bytes"], now)
 
 
-async def purge(db: AsyncSession, before: datetime) -> None:
-    """Metrik per jam lebih tua dari `before`; cuplikan per menit lebih tua dari 24 jam."""
+async def purge(db: AsyncSession, before: datetime, before_day: date) -> None:
+    """Metrik per jam lebih tua dari `before`, rekap harian sebelum `before_day`, cuplikan per menit lebih tua dari
+    SAMPLE_RETENTION."""
     async with db.begin():
         await db.execute(delete(Metric).where(Metric.at < before))
+        await db.execute(delete(DailyMetric).where(DailyMetric.day < before_day))
         now = await db.scalar(select(func.now()))
         await db.execute(delete(StatusSample).where(StatusSample.at < now - SAMPLE_RETENTION))

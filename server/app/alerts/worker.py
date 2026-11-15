@@ -21,6 +21,7 @@ from app.nas import scan as nas_scan
 from app.nas import service as nas_service
 from app.nas.monitor import NasMonitor
 from app.agents.dependencies import registry
+from app.reports import daily as metrics_daily
 from app.reports import ingest as metrics_ingest
 from app.reports import service as report_service
 from app.notifications import service as notification_service
@@ -70,9 +71,13 @@ async def main() -> None:
                     await tick(factory, monitor, client)
                     if rounds % PURGE_EVERY == 0:
                         await purge_auth_rows(factory)
+                        async with factory() as db:    # rekap harian lebih dulu: purge menghapus cuplikan lama
+                            await metrics_daily.rollup(db)
                         async with factory() as db:
-                            cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=settings.METRICS_RETENTION_DAYS)
-                            await metrics_ingest.purge(db, cutoff)
+                            now = datetime.now(UTC).replace(tzinfo=None)
+                            cutoff = now - timedelta(days=settings.METRICS_RETENTION_DAYS)
+                            day_cutoff = metrics_daily.local_day(now) - timedelta(days=settings.DAILY_METRICS_RETENTION_DAYS)
+                            await metrics_ingest.purge(db, cutoff, day_cutoff)
                         async with factory() as db:
                             await retention_service.run_retention(db, deleter)
                         async with factory() as db:

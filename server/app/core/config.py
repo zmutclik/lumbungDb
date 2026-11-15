@@ -81,6 +81,7 @@ class Settings(BaseSettings):
 
     # Kesehatan database dan laporan (tahap 3). Angka awal, belum diukur pada database sebenarnya.
     METRICS_RETENTION_DAYS: int = 90
+    DAILY_METRICS_RETENTION_DAYS: int = Field(default=800, ge=1)   # rekap harian; >2 tahun untuk banding tahunan
     REPORT_HOUR: int = Field(default=7, ge=0, le=23)   # jam lokal (DISPLAY_TIMEZONE) laporan harian dan mingguan terbit
     REPORT_CONN_WARN_PERCENT: int = 80
     REPORT_HITRATIO_MIN: int = 95

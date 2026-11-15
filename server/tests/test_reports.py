@@ -338,7 +338,7 @@ def test_chart_paths_stay_inside_plot():
     assert len(chart.hits) == 4 and "Kueri: 100" in chart.hits[2][2]
 
 
-async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_a_day(client, agent):
+async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_fifty_hours(client, agent):
     status = {**metrics()["status"], "Questions": 50, "Com_select": 9}
     await beat(client, agent, metrics={**metrics(), "status": status})
     status["Questions"] = 80
@@ -351,9 +351,9 @@ async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_a_day(cli
         assert "memory_limit" not in rows[0].data
         now = await db.scalar(select(func.now()))
     async with async_session_factory() as db, db.begin():
-        db.add(sample(now - timedelta(hours=25), 10))
+        db.add(sample(now - timedelta(hours=51), 10))
     async with async_session_factory() as db:
-        await ingest.purge(db, now - timedelta(days=90))
+        await ingest.purge(db, now - timedelta(days=90), (now - timedelta(days=800)).date())
     async with async_session_factory() as db:
         assert len((await db.execute(select(StatusSample))).scalars().all()) == 1
 

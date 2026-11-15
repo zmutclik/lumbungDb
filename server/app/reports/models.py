@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import JSON, BigInteger, Double, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import JSON, BigInteger, Date, Double, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.containers.models import NAME_LENGTH
@@ -51,8 +51,9 @@ class Report(Base):
 
 
 class StatusSample(Base):
-    """Cuplikan SHOW GLOBAL STATUS mentah per menit untuk grafik aktivitas; disimpan 24 jam. Laju per detik dihitung saat
-    tampil dari selisih dua cuplikan dibagi selisih Uptime, jadi restart MariaDB cukup memutus garis."""
+    """Cuplikan SHOW GLOBAL STATUS mentah per menit untuk grafik aktivitas dan rekap harian; disimpan 50 jam supaya
+    rekap kemarin selalu dihitung dari data utuh. Laju per detik dihitung saat tampil dari selisih dua cuplikan dibagi
+    selisih Uptime, jadi restart MariaDB cukup memutus garis."""
 
     __tablename__ = "status_samples"
 
@@ -60,3 +61,18 @@ class StatusSample(Base):
     at: Mapped[datetime] = mapped_column(primary_key=True)        # awal menit, UTC
     uptime: Mapped[int] = mapped_column(BigInteger)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+class DailyMetric(Base):
+    """Rekap per hari lokal (DISPLAY_TIMEZONE) untuk laporan bulanan sampai tahunan; disimpan
+    DAILY_METRICS_RETENTION_DAYS. Dihitung ulang tiap jam dari cuplikan per menit dan metrik per jam (app/reports/daily.py),
+    jadi baris hari ini masih sebagian; `minutes` menyatakan berapa menit yang punya cuplikan."""
+
+    __tablename__ = "daily_metrics"
+    __table_args__ = (Index("ix_daily_metrics_day", "day"),)
+
+    container: Mapped[str] = mapped_column(String(NAME_LENGTH), ForeignKey("containers.name"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[float] = mapped_column(Double)
+    peak_at: Mapped[datetime | None] = mapped_column()           # UTC, untuk nilai puncak
