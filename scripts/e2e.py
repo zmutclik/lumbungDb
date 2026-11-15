@@ -590,7 +590,7 @@ def simulate_files(ui, token):
     peak = [0.0]
 
     def arrived():
-        usage = run("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", f"{PROJECT}-web-1", check_rc=False).stdout.split("/")[0].strip()
+        usage = run("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", f"{PROJECT}-web", check_rc=False).stdout.split("/")[0].strip()
         if usage.endswith("MiB"):
             peak[0] = max(peak[0], float(usage[:-3]))
         elif usage.endswith("GiB"):

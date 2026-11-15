@@ -5,6 +5,7 @@
 name: lumbung-runner
 services:
   runner:
+    container_name: lumbung-runner
     image: ${RUNNER_IMAGE:?isi RUNNER_IMAGE}
     restart: unless-stopped
     # Mengganti database cadangan dan naikkan ke production ditunggu selesai saat docker stop (lihat README)
