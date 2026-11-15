@@ -344,6 +344,15 @@ async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_a_day(cli
         assert len((await db.execute(select(StatusSample))).scalars().all()) == 1
 
 
+async def test_container_page_shows_empty_activity_without_samples(client, agent):
+    await beat(client, agent)
+    await make_user()
+    await login(client)
+    page = (await client.get(f"/containers/{NAME}")).text
+    assert "Aktivitas MariaDB" in page and "Belum ada cuplikan aktivitas" in page
+    assert page.count("Perlu dua heartbeat") == 4 and 'class="chart act-chart"' not in page
+
+
 async def test_container_page_shows_activity(client, agent):
     await beat(client, agent, metrics=metrics())
     async with async_session_factory() as db, db.begin():

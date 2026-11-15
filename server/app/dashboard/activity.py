@@ -218,17 +218,15 @@ class Activity:
     stale: bool
 
 
-async def load(db: AsyncSession, container: str, now: datetime) -> Activity | None:
-    """None bila belum ada cuplikan sama sekali dalam satu jam terakhir."""
+async def load(db: AsyncSession, container: str, now: datetime) -> Activity:
+    """Tanpa cuplikan dalam satu jam terakhir: tile berisi "—" dan grafik kosong, last_at None."""
     start = now - WINDOW
     samples = (await db.execute(
         select(StatusSample).where(StatusSample.container == container, StatusSample.at >= start - GAP)
         .order_by(StatusSample.at))).scalars().all()
-    if not samples:
-        return None
     points = rate_points(samples)
-    latest = samples[-1]
-    data = latest.data
+    latest = samples[-1] if samples else None
+    data = latest.data if latest else {}
     last_rates = points[-1].rates if points and points[-1] is not None else {}
     requests, reads = data.get("Innodb_buffer_pool_read_requests"), data.get("Innodb_buffer_pool_reads")
     hit = rules.hit_ratio(requests, reads) if requests else None
@@ -241,7 +239,7 @@ async def load(db: AsyncSession, container: str, now: datetime) -> Activity | No
         Tile("Trafik masuk", per_second_bytes(last_rates.get("bytes_in")), "rata-rata menit terakhir"),
         Tile("Trafik keluar", per_second_bytes(last_rates.get("bytes_out")), "rata-rata menit terakhir"),
         Tile("Kueri lambat", count(data.get("Slow_queries")), "sejak MariaDB mulai"),
-        Tile("Waktu aktif", uptime_text(latest.uptime), "sejak restart terakhir"),
+        Tile("Waktu aktif", uptime_text(latest.uptime if latest else None), "sejak restart terakhir"),
         Tile("Rasio hit InnoDB", f"{hit:.2f}%".replace(".", ",") if hit is not None else "—", "buffer pool, kumulatif"),
     ]
     charts = [
@@ -253,4 +251,4 @@ async def load(db: AsyncSession, container: str, now: datetime) -> Activity | No
                     [("select", "SELECT"), ("insert", "INSERT"), ("update", "UPDATE"), ("delete", "DELETE")],
                     number, start, now),
     ]
-    return Activity(tiles, charts, latest.at, now - latest.at > STALE)
+    return Activity(tiles, charts, latest.at if latest else None, bool(latest) and now - latest.at > STALE)
