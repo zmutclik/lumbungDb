@@ -7,6 +7,9 @@ import subprocess
 
 DB_SOCKET = "/run/mysqld/mysqld.sock"
 DB_USER = "lumbung"
+# Mode sidecar: MariaDB ada di container lain (namespace jaringan yang sama), jadi user `lumbung` masuk lewat TCP
+# dengan password di berkas ini, milik user OS lumbung, izin 600. Isinya ditulis entrypoint.
+SIDECAR_CNF = "/etc/lumbung/metrics.cnf"
 SYSTEM_SCHEMAS = ("information_schema", "performance_schema", "mysql", "sys")
 SIZE_INTERVAL_SECONDS = 24 * 3600
 MAX_DATABASES = 50
@@ -43,8 +46,11 @@ _DIGEST_SQL = ("SELECT COALESCE(schema_name,''), digest_text, count_star, sum_ti
 
 def query(sql, runner=subprocess.run, timeout=20):
     """Baris tab-separated sebagai daftar daftar string; None bila gagal."""
-    args = ["mariadb", "--protocol=socket", f"--socket={DB_SOCKET}", f"--user={DB_USER}", "--batch",
-            "--skip-column-names", "--connect-timeout=5", "-e", sql]
+    if os.environ.get("LUMBUNG_MODE") == "sidecar":
+        login = [f"--defaults-extra-file={SIDECAR_CNF}", "--protocol=tcp"]
+    else:
+        login = ["--protocol=socket", f"--socket={DB_SOCKET}", f"--user={DB_USER}"]
+    args = ["mariadb", *login, "--batch", "--skip-column-names", "--connect-timeout=5", "-e", sql]
     try:
         run = runner(args, capture_output=True, text=True, errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError):
@@ -140,6 +146,7 @@ def collect_process(proc="/proc", cgroup="/sys/fs/cgroup"):
     pid = find_server_pid(proc)
     if pid is None:
         return None
+    sidecar = os.environ.get("LUMBUNG_MODE") == "sidecar"
     stat = _read(f"{proc}/{pid}/stat") or ""
     # Nama proses di antara kurung bisa berisi spasi; field sesudah ')' dimulai dari state (field 3).
     fields = stat.rpartition(")")[2].split()
@@ -159,8 +166,9 @@ def collect_process(proc="/proc", cgroup="/sys/fs/cgroup"):
     return {
         "cpu_seconds": round((utime + stime) / ticks, 2),
         "rss_bytes": rss * 1024,
-        "memory_limit": _memory_limit(proc, cgroup),
-        "cpus": _cpu_limit(cgroup),
+        # Sidecar: cgroup di sini milik sidecar, bukan container MariaDB, jadi batasnya tidak dilaporkan.
+        "memory_limit": None if sidecar else _memory_limit(proc, cgroup),
+        "cpus": None if sidecar else _cpu_limit(cgroup),
     }
 
 

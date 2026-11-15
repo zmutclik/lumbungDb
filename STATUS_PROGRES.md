@@ -44,7 +44,12 @@ Semua uji memakai folder lokal sebagai NAS, Telegram tiruan, dan data contoh. Be
 
 ### 5. Celah yang diketahui
 - `scripts/e2e.sh` belum mencakup runner, Naikkan ke production, Restore manual, dan AI.
-- Image `zmutclik/mariadb:lumbungdb-*` baru dibangun lokal, belum di-push ke registry.
+- Image `zmutclik/mariadb:lumbungdb-*` baru dibangun lokal, belum di-push ke registry (12.3, serta 10.11-a5 dan
+  11.4-a5 untuk mode sidecar).
+- Mode sidecar (15 November 2026): image dan compose sudah ada dan diuji dengan target `mariadb:10.11` dan `mariadb:11.4`
+  resmi (full, dump, binlog, restore + replay binlog, restart target). Belum ada: pilihan "Container sudah ada" di Tambah
+  container dan script pasangnya, penanda mode sidecar di dashboard (kartu tuning tetap tampil), runner dengan image
+  per versi MariaDB (sekarang satu `MARIADB_IMAGE` per runner), dan uji dengan tag `zmutclik/mariadb` lama.
 - Runner yang belum pernah mengirim heartbeat bisa terpilih sebagai runner container baru (alert runner yang menandai).
 - Penaikan yang runner-nya mati di tengah (batas waktu habis) meninggalkan nama container baru terdaftar di
   `agents.conf` tanpa agen; pembersihan hanya jalan saat runner melapor gagal.

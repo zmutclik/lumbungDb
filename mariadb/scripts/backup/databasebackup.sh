@@ -136,6 +136,26 @@ main() {
     SUCCESSFUL_DATABASES=""
     DELETED_FILESBACKUP=""
 
+    # Mode sidecar: datadir milik container MariaDB lain, dipasang read-only di path yang sama lewat volumes_from.
+    # Path InnoDB diambil dari server, bukan dari config sidecar.
+    if grep -qx "LUMBUNG_MODE=sidecar" /etc/lumbung/backup.env 2>/dev/null; then
+        local VARS
+        if ! VARS=$($MYSQL -BNe "SELECT @@datadir, @@innodb_log_group_home_dir, @@innodb_undo_directory, @@innodb_data_home_dir;" 2>>"$LOGFILE"); then
+            log "GAGAL: tidak bisa membaca datadir dari MariaDB"
+            exit 1
+        fi
+        local DATADIR LOG_HOME UNDO_DIR DATA_HOME
+        IFS=$'\t' read -r DATADIR LOG_HOME UNDO_DIR DATA_HOME <<<"$VARS"
+        MYSQLBACKUP="$MYSQLBACKUP --datadir=$DATADIR"
+        [[ "$LOG_HOME" == /* ]] && MYSQLBACKUP="$MYSQLBACKUP --innodb-log-group-home-dir=$LOG_HOME"
+        [[ "$UNDO_DIR" == /* ]] && MYSQLBACKUP="$MYSQLBACKUP --innodb-undo-directory=$UNDO_DIR"
+        [[ "$DATA_HOME" == /* ]] && MYSQLBACKUP="$MYSQLBACKUP --innodb-data-home-dir=$DATA_HOME"
+        if [ ! -d "$DATADIR" ]; then
+            log "GAGAL: datadir $DATADIR tidak terpasang di sidecar (cek volumes_from)"
+            exit 1
+        fi
+    fi
+
     # Binlog aktif saat backup dimulai, kosong jika binlog tidak aktif
     BINLOG_START=$($MYSQL -BNe "SHOW BINARY LOGS;" 2>/dev/null | tail -n1 | cut -f1)
 

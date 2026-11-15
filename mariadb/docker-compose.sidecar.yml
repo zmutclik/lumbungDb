@@ -1,0 +1,50 @@
+# Mode sidecar: backup dan replika untuk container MariaDB yang sudah ada tanpa mengganti image-nya (image mariadb resmi
+# atau tag zmutclik/mariadb lama). Container MariaDB tidak di-restart dan config-nya tidak diubah. Syarat:
+#   - IMAGE_TAG berversi MariaDB sama dengan target sampai minor, mis. target 10.11.x -> 10.11-a5. mariadb-backup
+#     menolak server dengan versi lain.
+#   - Binlog aktif di target (SELECT @@log_bin = 1) untuk binlog dan database cadangan. Tanpa itu hanya full dan dump.
+#   - Akun dibuat sekali di target: lihat lumbung-sidecar-sql.
+# Simpan di samping .env lalu:  docker compose -p <project>-lumbung -f docker-compose.sidecar.yml up -d
+# Bila container target dibuat ulang (ID baru), jalankan ulang perintah itu dengan --force-recreate.
+services:
+  lumbung:
+    image: zmutclik/mariadb:lumbungdb-${IMAGE_TAG:?isi IMAGE_TAG di .env, versi sama dengan MariaDB target}
+    container_name: ${CONTAINER_NAME:?isi CONTAINER_NAME}-lumbung
+    # Namespace jaringan target: MariaDB terlihat di 127.0.0.1 tanpa membuka port. Namespace PID target: CPU dan memori
+    # mariadbd terbaca, dan sidecar ikut berhenti saat target berhenti, lalu dijalankan lagi oleh restart: always.
+    network_mode: container:${TARGET_CONTAINER:?isi TARGET_CONTAINER}
+    pid: container:${TARGET_CONTAINER}
+    restart: always
+    environment:
+      LUMBUNG_MODE: sidecar
+      DB_PORT: ${DB_PORT:-3306}
+      BACKUP_USER: ${BACKUP_USER:?isi BACKUP_USER}
+      BACKUP_PASS: ${BACKUP_PASS:?isi BACKUP_PASS}
+      LUMBUNG_METRICS_PASS: ${LUMBUNG_METRICS_PASS:?isi LUMBUNG_METRICS_PASS}
+      BACKUP_CRON: ${BACKUP_CRON:-}
+      DUMP_CRON: ${DUMP_CRON:-}
+      BINLOG_CRON: ${BINLOG_CRON:-}
+      BINLOG_UNSENT_MAX_DAYS: ${BINLOG_UNSENT_MAX_DAYS:-3}
+      LUMBUNG_URL: ${LUMBUNG_URL:-}
+      LUMBUNG_TOKEN: ${LUMBUNG_TOKEN:-}
+      LUMBUNG_AGE_RECIPIENTS: ${LUMBUNG_AGE_RECIPIENTS:-}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-60}
+      STABLE_SECONDS: ${STABLE_SECONDS:-120}
+      MAX_FILE_AGE_DAYS: ${MAX_FILE_AGE_DAYS:-0}
+    # Semua volume target di path yang sama, read-only: datadir, dan binlog bila log_bin memakai path lain.
+    # /backup di bawah menimpa /backup milik target (tag zmutclik lama), jadi arsip lama tidak tersentuh.
+    volumes_from:
+      - container:${TARGET_CONTAINER}:ro
+    volumes:
+      - backup:/backup
+      - /etc/hostname:/lumbung/server/hostname:ro
+      - /etc/machine-id:/lumbung/server/machine-id:ro
+    # Backup tidak boleh merebut jatah MariaDB.
+    deploy:
+      resources:
+        limits:
+          cpus: "${SIDECAR_CPUS:-1}"
+          memory: ${SIDECAR_MEM_LIMIT:-1G}
+
+volumes:
+  backup:

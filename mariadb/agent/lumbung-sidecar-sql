@@ -1,0 +1,53 @@
+#!/usr/bin/python3 -I
+"""Mencetak SQL akun untuk mode sidecar dari env BACKUP_USER, BACKUP_PASS, dan LUMBUNG_METRICS_PASS. Dijalankan sekali,
+hasilnya dijalankan sebagai root di container MariaDB target lewat socket-nya sendiri, misalnya:
+
+  docker compose run --rm --no-deps -T --entrypoint lumbung-sidecar-sql lumbung \\
+    | docker exec -i <container> mariadb -uroot -p<password-root>
+
+Akun dibuat untuk 127.0.0.1 dan localhost: sidecar masuk lewat TCP 127.0.0.1, yang tercatat sebagai localhost bila
+MariaDB target me-resolve nama host. Aman dijalankan ulang; password ikut disamakan dengan .env.
+"""
+import os
+import re
+import sys
+
+USER = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+BACKUP_GRANTS = "SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, RELOAD, PROCESS, BINLOG MONITOR"
+
+
+def literal(value):
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def main():
+    backup_user = os.environ.get("BACKUP_USER", "")
+    backup_pass = os.environ.get("BACKUP_PASS", "")
+    metrics_pass = os.environ.get("LUMBUNG_METRICS_PASS", "")
+    if not USER.fullmatch(backup_user) or backup_user == "lumbung":
+        print("BACKUP_USER tidak valid", file=sys.stderr)
+        return 2
+    if not backup_pass or not metrics_pass:
+        print("BACKUP_PASS dan LUMBUNG_METRICS_PASS wajib diisi", file=sys.stderr)
+        return 2
+    lines = []
+    for host in ("127.0.0.1", "localhost"):
+        account = f"{literal(backup_user)}@{literal(host)}"
+        lines += [f"CREATE USER IF NOT EXISTS {account} IDENTIFIED BY {literal(backup_pass)};",
+                  f"ALTER USER {account} IDENTIFIED BY {literal(backup_pass)};",
+                  f"GRANT {BACKUP_GRANTS} ON *.* TO {account};"]
+        # Hak sama dengan user metrik di image: tanpa hak baca isi tabel.
+        # unix_socket tetap diterima, supaya akun lumbung dari image LumbungDB di volume yang sama tidak rusak.
+        account = f"'lumbung'@{literal(host)}"
+        auth = f"IDENTIFIED VIA unix_socket OR mysql_native_password USING PASSWORD({literal(metrics_pass)})"
+        lines += [f"CREATE USER IF NOT EXISTS {account} {auth};",
+                  f"ALTER USER {account} {auth};",
+                  f"GRANT SHOW VIEW ON *.* TO {account};",
+                  f"GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO {account};"]
+    lines.append("FLUSH PRIVILEGES;")
+    print("\n".join(lines))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

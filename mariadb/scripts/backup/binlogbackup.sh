@@ -85,6 +85,11 @@ archive_binlogs() {
         BACKUP_FAILED=1
         return
     fi
+    # Binlog bisa berada di luar datadir (log_bin dengan path absolut). Di mode sidecar path-nya sama dengan di container
+    # MariaDB, karena volume dipasang lewat volumes_from.
+    local BASENAME
+    BASENAME=$($MYSQL -BNe "SELECT @@log_bin_basename;" 2>>"$LOGFILE")
+    [[ "$BASENAME" == /* ]] && DATA_DIR=$(dirname "$BASENAME")
 
     # Tutup binlog aktif hanya jika ada perubahan sejak flush terakhir
     if [ "$(echo "$BINLOGS" | tail -n1)" != "$(cat "$STATE_FILE" 2>/dev/null)" ]; then

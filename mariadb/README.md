@@ -300,3 +300,40 @@ GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'lumbu
 ```
 
 Tanpa user ini heartbeat tetap berjalan, hanya tanpa metrik. Daftar query terberat hanya ada bila `performance_schema=ON`.
+
+## Mode sidecar: container yang sudah ada
+
+Untuk container MariaDB yang tidak bisa diganti image-nya (image `mariadb` resmi atau tag `zmutclik/mariadb` lama).
+Image yang sama dijalankan dengan `LUMBUNG_MODE=sidecar` di samping container itu: tanpa `mariadbd`, hanya cron backup
+dan agen. Container MariaDB tidak di-restart dan config-nya tidak diubah. Compose-nya `docker-compose.sidecar.yml`.
+
+- Sidecar berbagi namespace jaringan dan PID dengan target, jadi MariaDB terlihat di `127.0.0.1` tanpa membuka port, dan
+  sidecar ikut berhenti lalu hidup lagi saat target di-restart. Bila target **dibuat ulang** (ID baru), jalankan ulang
+  `up -d --force-recreate` untuk sidecar.
+- Semua volume target dipasang read-only di path yang sama lewat `volumes_from`, termasuk binlog yang `log_bin`-nya di
+  luar datadir. `/backup` milik sidecar sendiri.
+- `IMAGE_TAG` harus sama versinya dengan target sampai minor: target 10.11.x memakai `10.11-a5`, 11.4.x memakai `11.4-a5`.
+  Image tersedia untuk 10.11, 11.4, dan 12.3. Versi lain: `MARIADB_VERSION=<versi> ./build-image.sh`.
+- Binlog harus aktif di target (`SELECT @@log_bin` bernilai 1) untuk arsip binlog dan database cadangan. Menyalakannya
+  butuh restart target sekali dengan `log_bin` dan `server_id`. Tanpa itu hanya full dan dump yang jalan.
+- Tuning dari LumbungDB ditolak, dan metrik tidak menyertakan batas CPU dan memori container.
+- Runner yang menguji atau memulihkan backup container ini harus memakai `MARIADB_IMAGE` dengan versi yang sama.
+
+Langkah:
+
+```bash
+# .env di samping docker-compose.yml (salinan docker-compose.sidecar.yml), izin 600:
+#   IMAGE_TAG=10.11-a5  CONTAINER_NAME=<nama di LumbungDB>  TARGET_CONTAINER=<nama container MariaDB>
+#   BACKUP_USER=backup_<acak>  BACKUP_PASS=<acak>  LUMBUNG_METRICS_PASS=<acak>
+#   LUMBUNG_URL=...  LUMBUNG_TOKEN=...  LUMBUNG_AGE_RECIPIENTS=...  (DB_PORT bila target tidak di 3306)
+
+# Sekali: buat akun backup dan metrik di target lewat socket target sendiri (diminta password root).
+docker compose -p <project>-lumbung run --rm --no-deps -T --entrypoint lumbung-sidecar-sql lumbung \
+  | docker exec -i <container> mariadb -uroot -p
+
+docker compose -p <project>-lumbung up -d
+docker logs <nama>-lumbung    # jadwal backup; PERINGATAN bila file datadir terbaca user lumbung
+```
+
+Bila log menampilkan PERINGATAN datadir, jalankan `docker exec <container> chmod 750 /var/lib/mysql` supaya agen tidak
+bisa membaca isi database.

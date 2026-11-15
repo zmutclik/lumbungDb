@@ -80,8 +80,25 @@ def encrypt_file(source, target, recipients):
                        timeout=ENCRYPT_TIMEOUT_SECONDS)
 
 
+def sidecar_mode():
+    """Sidecar: agen berjalan di container sendiri di samping container MariaDB yang sudah ada (image lain atau tag
+    lama), berbagi namespace jaringan dan PID dengannya. Tuning tidak dikelola, karena config MariaDB-nya tidak disentuh."""
+    return os.environ.get("LUMBUNG_MODE") == "sidecar"
+
+
+def db_address():
+    port = int_env("DB_PORT", 3306)
+    return os.environ.get("DB_HOST") or "127.0.0.1", port if 0 < port < 65536 else 3306
+
+
 def db_accepts_connections(path=DB_SOCKET):
     """Hanya membuka socket, tanpa login: agen tidak memegang password database."""
+    if sidecar_mode():
+        try:
+            with socket.create_connection(db_address(), timeout=2):
+                return True
+        except OSError:
+            return False
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(2)
         try:
@@ -382,6 +399,11 @@ class Agent:
     # ---------- heartbeat ----------
     @staticmethod
     def _mariadb_version():
+        if sidecar_mode():
+            # Versi MariaDB target, bukan biner di sidecar. None bila target belum bisa dihubungi; dicoba lagi tiap heartbeat.
+            rows = metrics_lib.query("SELECT VERSION()")
+            match = re.search(r"(\d+\.\d+\.\d+)", rows[0][0]) if rows and rows[0] else None
+            return match.group(1) if match else None
         for binary in ("/usr/sbin/mariadbd", "mariadbd"):
             try:
                 output = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=20).stdout
@@ -391,6 +413,11 @@ class Agent:
             if match:
                 return match.group(1)
         return None
+
+    def _current_mariadb_version(self):
+        if self.mariadb_version is None and sidecar_mode():
+            self.mariadb_version = self._mariadb_version()
+        return self.mariadb_version
 
     @staticmethod
     def _read_first_line(path):
@@ -468,7 +495,7 @@ class Agent:
             "server": self._read_first_line(f"{SERVER_DIR}/hostname"),
             "machine_id": self._read_first_line(f"{SERVER_DIR}/machine-id"),
             "agent_version": self.config["agent_version"],
-            "mariadb_version": self.mariadb_version,
+            "mariadb_version": self._current_mariadb_version(),
             "disk": self._disk(),
             "files": self._counts(),
             "log": self._log_tail(),
@@ -529,6 +556,9 @@ class Agent:
         version = wanted.get("version")
         if not isinstance(version, int) or isinstance(version, bool) or version < 0:
             self.tuning_error = {"version": 0, "message": "versi tuning tidak valid"}
+            return
+        if sidecar_mode():
+            self.tuning_error = {"version": version, "message": "mode sidecar: tuning MariaDB tidak dikelola LumbungDB"}
             return
         error = tuning_lib.inputs_error(wanted)
         if error:

@@ -76,6 +76,32 @@ def test_socket_check_sees_listening_and_closed_socket(agent_module, tmp_path):
     assert agent_module.db_accepts_connections(path) is False
 
 
+def test_sidecar_checks_tcp_port_of_target(agent_module, monkeypatch):
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        monkeypatch.setenv("LUMBUNG_MODE", "sidecar")
+        monkeypatch.setenv("DB_PORT", str(server.getsockname()[1]))
+        assert agent_module.db_accepts_connections() is True
+    assert agent_module.db_accepts_connections() is False
+
+
+def test_sidecar_refuses_tuning_without_calling_helper(agent_module, monkeypatch):
+    monkeypatch.setenv("LUMBUNG_MODE", "sidecar")
+    monkeypatch.setattr(agent_module.subprocess, "run", lambda *a, **k: pytest.fail("helper dipanggil"))
+    agent = object.__new__(agent_module.Agent)
+    agent.handle_tuning({"version": 3, "mode": "auto", "memory_mb": 1024, "max_connections": 100, "disk": "ssd"})
+    assert agent.tuning_error["version"] == 3 and "sidecar" in agent.tuning_error["message"]
+
+
+def test_sidecar_reports_version_of_target_server(agent_module, monkeypatch):
+    monkeypatch.setenv("LUMBUNG_MODE", "sidecar")
+    monkeypatch.setattr(agent_module.metrics_lib, "query", lambda sql: [["10.11.9-MariaDB-ubu2204-log"]])
+    assert agent_module.Agent._mariadb_version() == "10.11.9"
+    monkeypatch.setattr(agent_module.metrics_lib, "query", lambda sql: None)
+    assert agent_module.Agent._mariadb_version() is None
+
+
 RECIPIENT = "age1" + "q" * 58
 
 

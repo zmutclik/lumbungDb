@@ -20,6 +20,7 @@ RUN install -d -m 755 /opt/lumbung
 COPY --chmod=644 agent/agent.py agent/schedule.py agent/metrics.py agent/tuning.py scripts/tuning-account.sql /opt/lumbung/
 COPY --chmod=755 agent/lumbung-helper /usr/local/sbin/lumbung-helper
 COPY --chmod=755 agent/lumbung-agent /usr/local/bin/lumbung-agent
+COPY --chmod=755 agent/lumbung-sidecar-sql /usr/local/bin/lumbung-sidecar-sql
 COPY --chmod=440 agent/lumbung.sudoers /etc/sudoers.d/lumbung
 RUN echo "$IMAGE_TAG" >/opt/lumbung/VERSION
 RUN rm /etc/ssl/openssl.cnf

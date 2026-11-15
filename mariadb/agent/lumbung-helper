@@ -37,7 +37,18 @@ def apply_schedule(args):
         sys.exit(1)
 
 
+def sidecar_mode():
+    """Ditulis entrypoint sebagai root; env sudo tidak dipercaya."""
+    try:
+        with open("/etc/lumbung/backup.env") as handle:
+            return "LUMBUNG_MODE=sidecar\n" in handle.read()
+    except OSError:
+        return False
+
+
 def apply_tuning(args):
+    if sidecar_mode():
+        refuse("mode sidecar: tuning MariaDB tidak dikelola LumbungDB")
     if len(args) != 5 or not all(re.fullmatch(r"[0-9]{1,9}", a) for a in (args[0], args[2], args[3])):
         refuse("argumen apply-tuning tidak valid")
     wanted = {"mode": args[1], "memory_mb": int(args[2]), "max_connections": int(args[3]), "disk": args[4]}

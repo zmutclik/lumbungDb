@@ -176,3 +176,25 @@ def test_process_missing_does_not_block_payload(metrics, tmp_path):
     assert payload["status"]["Threads_connected"] == 12 and "process" not in payload
     stub = {"cpu_seconds": 1.0, "rss_bytes": 10, "memory_limit": None, "cpus": 2.0}
     assert metrics.Collector(lambda: 1000.0, fake(OUTPUTS), process=lambda: stub).payload()["process"] == stub
+
+
+# ---------- mode sidecar ----------
+def test_sidecar_query_logs_in_over_tcp_with_cnf(metrics, monkeypatch):
+    monkeypatch.setenv("LUMBUNG_MODE", "sidecar")
+    seen = []
+
+    def run(args, **kwargs):
+        seen.append(args)
+        return subprocess.CompletedProcess(args, 0, "1\n", "")
+
+    assert metrics.query("SELECT 1", run) == [["1"]]
+    assert f"--defaults-extra-file={metrics.SIDECAR_CNF}" in seen[0] and "--protocol=tcp" in seen[0]
+    assert not any(a.startswith("--socket") or a.startswith("--user") for a in seen[0])
+
+
+def test_sidecar_process_omits_limits_of_its_own_cgroup(metrics, tmp_path, monkeypatch):
+    monkeypatch.setenv("LUMBUNG_MODE", "sidecar")
+    proc, cgroup = fake_proc(tmp_path, cgroup_files={"memory.max": "2147483648\n", "cpu.max": "150000 100000\n"})
+    sample = metrics.collect_process(proc, cgroup)
+    assert sample["rss_bytes"] == 200 * 1024 * 1024
+    assert sample["memory_limit"] is None and sample["cpus"] is None
