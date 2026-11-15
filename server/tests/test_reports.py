@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.agents.dependencies import registry
 from app.alerts import service as alert_service
@@ -15,7 +15,10 @@ from app.nas.monitor import ProbeResult
 from app.nas.service import save_result
 from app.reports import rules
 from app.reports import service as reports
-from app.reports.models import Metric, MetricCounter, Report
+from app.dashboard import activity
+from app.reports import ingest
+from app.reports.models import Metric, MetricCounter, Report, StatusSample
+from tests.conftest import login, make_user
 from tests.test_control import payload
 
 NAME = "siak-db"
@@ -273,3 +276,83 @@ async def test_disk_forecast_raises_alert():
         _, _, alerts, _, _ = await alert_service.current_alerts(db)
     disk = [a for a in alerts if a.key == f"diskfull:{NAME}"]
     assert disk and disk[0].level == "bad" and "penuh dalam" in disk[0].cond
+
+
+# ---------- aktivitas per menit ----------
+def sample(at, uptime, **values):
+    data = {"Questions": 0, "Connections": 0, "Bytes_received": 0, "Bytes_sent": 0, "Com_select": 0,
+            "Com_insert": 0, "Com_update": 0, "Com_delete": 0, "Threads_connected": 3, "Threads_running": 1,
+            "Slow_queries": 7, "Innodb_buffer_pool_read_requests": 1000, "Innodb_buffer_pool_reads": 10,
+            "max_connections": 151}
+    data.update(values)
+    return StatusSample(container=NAME, at=at, uptime=uptime, data=data)
+
+
+def test_rates_use_uptime_and_break_on_restart_or_gap():
+    start = datetime(2026, 11, 15, 1, 0)
+    samples = [
+        sample(start, 1000, Questions=100),
+        sample(start + timedelta(minutes=1), 1060, Questions=700, Com_select=120),   # 600/60 = 10 qps
+        sample(start + timedelta(minutes=2), 30, Questions=50),                      # restart: putus
+        sample(start + timedelta(minutes=3), 90, Questions=110),
+        sample(start + timedelta(minutes=10), 510, Questions=530),                   # celah heartbeat: putus
+    ]
+    points = activity.rate_points(samples)
+    assert points[0].rates["qps"] == pytest.approx(10) and points[0].rates["select"] == pytest.approx(2)
+    assert points[1] is None and points[3] is None
+    assert points[2].rates["qps"] == pytest.approx(1)
+
+
+def test_nice_scale_and_number_format():
+    assert activity.nice_scale(187) == (200, 50)
+    assert activity.nice_scale(0.3) == (0.4, 0.1)
+    assert activity.nice_scale(0) == (1.0, 0.25)
+    assert activity.number(45191.2) == "45.191" and activity.number(3.456) == "3,46"
+    assert activity.count(9999) == "9.999"
+    assert [activity.tick_label(v, 0.25) for v in (0, 0.5, 1)] == ["0,00", "0,50", "1,00"]
+    assert [activity.tick_label(v, 0.1) for v in (0, 0.4)] == ["0,0", "0,4"]
+    assert activity.tick_label(2500, 500) == "2.500"
+    assert activity.uptime_text(53 * 86400 + 8 * 3600 + 39 * 60) == "53 hari 8 jam"
+
+
+def test_chart_paths_stay_inside_plot():
+    start = datetime(2026, 11, 15, 1, 0)
+    samples = [sample(start + timedelta(minutes=m), 1000 + 60 * m, Questions=q)
+               for m, q in enumerate((0, 600, 600, 6600, 6600))]
+    chart = activity.build_chart("Kueri", activity.rate_points(samples), [("qps", "Kueri")], activity.number,
+                                 start, start + timedelta(hours=1), area=True)
+    assert not chart.empty and chart.series[0].path.startswith("M") and chart.series[0].area.endswith("Z")
+    ys = [float(n.split(",")[1]) for n in chart.series[0].path.replace("C", " ").replace("M", " ").split() if "," in n]
+    assert all(activity.TOP <= y <= activity.TOP + activity.PLOT_H for y in ys)
+    assert len(chart.hits) == 4 and "Kueri: 100" in chart.hits[2][2]
+
+
+async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_a_day(client, agent):
+    status = {**metrics()["status"], "Questions": 50, "Com_select": 9}
+    await beat(client, agent, metrics={**metrics(), "status": status})
+    status["Questions"] = 80
+    await beat(client, agent, metrics={**metrics(), "status": status})
+    async with async_session_factory() as db:
+        rows = (await db.execute(select(StatusSample))).scalars().all()
+        assert len(rows) == 1 and rows[0].data["Questions"] == 80 and rows[0].data["max_connections"] == 100
+        now = await db.scalar(select(func.now()))
+    async with async_session_factory() as db, db.begin():
+        db.add(sample(now - timedelta(hours=25), 10))
+    async with async_session_factory() as db:
+        await ingest.purge(db, now - timedelta(days=90))
+    async with async_session_factory() as db:
+        assert len((await db.execute(select(StatusSample))).scalars().all()) == 1
+
+
+async def test_container_page_shows_activity(client, agent):
+    await beat(client, agent, metrics=metrics())
+    async with async_session_factory() as db, db.begin():
+        await db.execute(delete(StatusSample))
+        now = await db.scalar(select(func.now()))
+        for m in range(5):
+            db.add(sample(now - timedelta(minutes=4 - m), 1000 + 60 * m, Questions=600 * m, Bytes_sent=61440 * m))
+    await make_user()
+    await login(client)
+    page = (await client.get(f"/containers/{NAME}")).text
+    assert "Aktivitas MariaDB" in page and page.count('class="chart act-chart"') == 4
+    assert "<b>10,0</b>" in page and "1,0 KB/dtk" in page and "<b>99,00%</b>" in page

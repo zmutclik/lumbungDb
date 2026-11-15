@@ -1,12 +1,12 @@
 """Menyimpan metrik dari heartbeat. Dipanggil di dalam transaksi heartbeat."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import case, delete
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backup_control.schemas import MetricsIn
-from app.reports.models import NAME, Metric, MetricCounter
+from app.reports.models import NAME, Metric, MetricCounter, StatusSample
 
 # Nama di SHOW GLOBAL STATUS → nama metrik
 COUNTER_NAMES = {
@@ -16,12 +16,34 @@ COUNTER_NAMES = {
     "Slow_queries": "slow_queries",
     "Innodb_deadlocks": "deadlocks",
 }
+# Nama di SHOW GLOBAL STATUS yang disimpan mentah tiap menit untuk grafik aktivitas.
+SAMPLE_NAMES = (
+    "Questions", "Connections", "Bytes_received", "Bytes_sent", "Com_select", "Com_insert", "Com_update", "Com_delete",
+    "Slow_queries", "Innodb_buffer_pool_read_requests", "Innodb_buffer_pool_reads", "Threads_connected",
+    "Threads_running",
+)
+SAMPLE_RETENTION = timedelta(hours=24)
 SIZE_DB = "size_db:"
 SIZE_TABLE = "size_table:"
 
 
 def hour_start(now: datetime) -> datetime:
     return now.replace(minute=0, second=0, microsecond=0)
+
+
+def minute_start(now: datetime) -> datetime:
+    return now.replace(second=0, microsecond=0)
+
+
+async def _sample(db: AsyncSession, container: str, now: datetime, metrics: MetricsIn) -> None:
+    """Satu baris per menit; heartbeat kedua dalam menit yang sama menimpa. Tanpa Uptime laju tidak bisa dihitung."""
+    uptime = metrics.status.get("Uptime")
+    if uptime is None:
+        return
+    data = {name: metrics.status[name] for name in SAMPLE_NAMES if name in metrics.status}
+    data["max_connections"] = metrics.max_connections
+    stmt = insert(StatusSample).values(container=container, at=minute_start(now), uptime=uptime, data=data)
+    await db.execute(stmt.on_duplicate_key_update({"uptime": stmt.inserted.uptime, "data": stmt.inserted.data}))
 
 
 async def _gauge(db: AsyncSession, container: str, at: datetime, name: str, value: float, now: datetime) -> None:
@@ -59,6 +81,7 @@ async def ingest(db: AsyncSession, container: str, metrics: MetricsIn | None, di
         await _gauge(db, container, at, "backup_disk_total", disk["total"], now)
     if metrics is None:
         return
+    await _sample(db, container, now, metrics)
     status = metrics.status
     if "Threads_connected" in status:
         await _gauge(db, container, at, "connections", status["Threads_connected"], now)
@@ -79,5 +102,8 @@ async def ingest(db: AsyncSession, container: str, metrics: MetricsIn | None, di
 
 
 async def purge(db: AsyncSession, before: datetime) -> None:
+    """Metrik per jam lebih tua dari `before`; cuplikan per menit lebih tua dari 24 jam."""
     async with db.begin():
         await db.execute(delete(Metric).where(Metric.at < before))
+        now = await db.scalar(select(func.now()))
+        await db.execute(delete(StatusSample).where(StatusSample.at < now - SAMPLE_RETENTION))

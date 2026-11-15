@@ -19,6 +19,8 @@ MAX_INDEX_ROWS = 100
 COUNTERS = (
     "Connection_errors_max_connections", "Innodb_buffer_pool_read_requests", "Innodb_buffer_pool_reads",
     "Slow_queries", "Innodb_deadlocks",
+    # Grafik aktivitas per menit di halaman container.
+    "Questions", "Connections", "Bytes_received", "Bytes_sent", "Com_select", "Com_insert", "Com_update", "Com_delete",
 )
 GAUGES = ("Threads_connected", "Threads_running", "Max_used_connections", "Uptime")
 

@@ -42,6 +42,11 @@
   --c-bad: #d92d20;
   --c-warn: #f79009;
   --c-thr: #f04438;
+  /* Seri grafik aktivitas: urutan tetap, divalidasi CVD (dataviz). */
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
   --ai: #5b21b6;
   --ai-2: #6d28d9;
   --ai-bg: #f5f3ff;
@@ -103,6 +108,10 @@
     --c-bad: #f97066;
     --c-warn: #fdb022;
     --c-thr: #f97066;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
     --ai: #c4b5fd;
     --ai-2: #c4b5fd;
     --ai-bg: #211a3a;
@@ -377,6 +386,21 @@ pre.log .err { color: #fda29b; }
 .chart .grid { stroke: var(--chart-grid); }
 .chart .fc-label { fill: var(--text-3); font-style: italic; }
 .spark { display: block; }
+.act-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.act-card { margin: 0; }
+.act-card .mhead b { font-size: 13px; font-weight: 600; }
+.act-legend { margin: 0; }
+.act-key { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: 3px; margin-right: 5px; }
+.act-key.s1, .act-line.s1, .act-area.s1 { color: var(--s1); }
+.act-key.s2, .act-line.s2 { color: var(--s2); }
+.act-key.s3, .act-line.s3 { color: var(--s3); }
+.act-key.s4, .act-line.s4 { color: var(--s4); }
+.act-key { background: currentColor; }
+.act-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.act-area { fill: currentColor; fill-opacity: .12; stroke: none; }
+.act-hit { fill: var(--text-3); fill-opacity: 0; }
+.act-hit:hover { fill-opacity: .08; }
+@media (max-width: 860px) { .act-grid { grid-template-columns: minmax(0, 1fr); } }
 .unavail { display: grid; place-items: center; min-height: 140px; color: var(--text-3); font-size: 13px; text-align: center; background: var(--surface-2); border-radius: 5px; padding: 10px; }
 
 .aibox { background: var(--ai-box); border: 1px solid var(--ai-box-line); border-radius: var(--radius); padding: 12px 14px; font-size: 13.5px; }

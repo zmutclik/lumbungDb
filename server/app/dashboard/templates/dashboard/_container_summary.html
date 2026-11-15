@@ -30,6 +30,7 @@
   {% set disk = info.get("disk") or {} %}
   <div class="tile"><small>Sisa disk /backup</small><b>{{ disk.get("free") | filesize }}</b><span class="muted">dari {{ disk.get("total") | filesize }}</span></div>
 </div>
+{% include "dashboard/_container_activity.html" %}
 <div class="section-title"><h2>Info container</h2></div>
 <div class="kv">
   <div><small>Database</small>{% for database in state.dumps if database != "_users" %}{{ database }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</div>

@@ -48,3 +48,15 @@ class Report(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     data: Mapped[dict] = mapped_column(JSON)
     sent_at: Mapped[datetime | None] = mapped_column()
+
+
+class StatusSample(Base):
+    """Cuplikan SHOW GLOBAL STATUS mentah per menit untuk grafik aktivitas; disimpan 24 jam. Laju per detik dihitung saat
+    tampil dari selisih dua cuplikan dibagi selisih Uptime, jadi restart MariaDB cukup memutus garis."""
+
+    __tablename__ = "status_samples"
+
+    container: Mapped[str] = mapped_column(String(NAME_LENGTH), ForeignKey("containers.name"), primary_key=True)
+    at: Mapped[datetime] = mapped_column(primary_key=True)        # awal menit, UTC
+    uptime: Mapped[int] = mapped_column(BigInteger)
+    data: Mapped[dict] = mapped_column(JSON)

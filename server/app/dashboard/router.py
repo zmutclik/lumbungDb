@@ -17,6 +17,7 @@ from app.containers import service as container_service
 from app.core.config import settings
 from app.core.database import DbSession
 from app.core.templating import render, templates
+from app.dashboard import activity as activity_view
 from app.dashboard import service as view
 from app.dashboard.schemas import BackupRequestForm, ContainerForm
 from app.installs import service as install_service
@@ -260,7 +261,8 @@ async def container_summary(name: str, request: Request, user: CurrentUserDep, d
     context = await _detail_context(db, user, name, "ringkasan")
     context.update(ai_enabled=get_provider() is not None, ai_explanation=await ai_service.latest_explanation(db, name),
                    ai_queries=await ai_service.latest_explanation(db, name, "query"),
-                   tuning_row=await control.get_tuning(db, name))
+                   tuning_row=await control.get_tuning(db, name),
+                   activity=await activity_view.load(db, name, context["now"]))
     return render(request, "dashboard/container.html", "dashboard/_container_summary.html", context)
 
 
