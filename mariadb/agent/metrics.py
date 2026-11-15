@@ -1,6 +1,7 @@
 """Metrik kesehatan MariaDB untuk tahap 3. Dibaca lewat socket sebagai user DB `lumbung` (unix_socket, tanpa password)
 yang hanya punya SHOW VIEW dan SELECT pada satu tabel performance_schema. Tidak ada hak baca isi tabel.
 Semua fungsi mengembalikan None atau daftar kosong bila gagal: metrik tidak pernah menghalangi heartbeat."""
+import os
 import re
 import subprocess
 
@@ -75,6 +76,91 @@ def collect_sample(runner=subprocess.run):
         "status": {name: status[name] for name in COUNTERS + GAUGES if status.get(name) is not None},
         "max_connections": max_connections,
         "performance_schema": variables.get("performance_schema", "OFF").upper() in ("ON", "1"),
+    }
+
+
+# ---------- CPU dan memori proses mariadbd ----------
+PROCESS_NAMES = ("mariadbd", "mysqld")
+
+
+def _read(path):
+    try:
+        with open(path, encoding="ascii", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def find_server_pid(proc="/proc"):
+    """PID mariadbd dari /proc/*/comm (berkas pid milik mysql tidak terbaca oleh user lumbung)."""
+    try:
+        entries = os.listdir(proc)
+    except OSError:
+        return None
+    for entry in sorted(entries, key=lambda e: int(e) if e.isdigit() else 0):
+        if entry.isdigit() and (_read(f"{proc}/{entry}/comm") or "").strip() in PROCESS_NAMES:
+            return int(entry)
+    return None
+
+
+def _memory_limit(proc, cgroup):
+    """Batas memori cgroup container (v2 lalu v1); tanpa batas: MemTotal mesin."""
+    total = None
+    for line in (_read(f"{proc}/meminfo") or "").splitlines():
+        if line.startswith("MemTotal:"):
+            total = _number(line.split()[1])
+            total = total * 1024 if total else None
+    for path in (f"{cgroup}/memory.max", f"{cgroup}/memory/memory.limit_in_bytes"):
+        limit = _number((_read(path) or "").strip())
+        if limit:
+            return min(limit, total) if total else limit
+    return total
+
+
+def _cpu_limit(cgroup):
+    """Jumlah core yang boleh dipakai: kuota cgroup (v2 lalu v1), cpuset, atau semua core."""
+    quota = period = None
+    parts = (_read(f"{cgroup}/cpu.max") or "").split()
+    if len(parts) == 2:
+        quota, period = _number(parts[0]), _number(parts[1])
+    else:
+        quota = _number((_read(f"{cgroup}/cpu/cpu.cfs_quota_us") or "").strip())
+        period = _number((_read(f"{cgroup}/cpu/cpu.cfs_period_us") or "").strip())
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cores = os.cpu_count() or 1
+    if quota and quota > 0 and period:
+        return round(min(cores, quota / period), 2)
+    return float(cores)
+
+
+def collect_process(proc="/proc", cgroup="/sys/fs/cgroup"):
+    """Waktu CPU kumulatif (detik) dan RSS mariadbd, beserta batas container. None bila proses tidak ditemukan."""
+    pid = find_server_pid(proc)
+    if pid is None:
+        return None
+    stat = _read(f"{proc}/{pid}/stat") or ""
+    # Nama proses di antara kurung bisa berisi spasi; field sesudah ')' dimulai dari state (field 3).
+    fields = stat.rpartition(")")[2].split()
+    rss = None
+    for line in (_read(f"{proc}/{pid}/status") or "").splitlines():
+        if line.startswith("VmRSS:"):
+            rss = _number(line.split()[1])
+    if len(fields) < 13 or rss is None:
+        return None
+    utime, stime = _number(fields[11]), _number(fields[12])
+    if utime is None or stime is None:
+        return None
+    try:
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError):
+        ticks = 100
+    return {
+        "cpu_seconds": round((utime + stime) / ticks, 2),
+        "rss_bytes": rss * 1024,
+        "memory_limit": _memory_limit(proc, cgroup),
+        "cpus": _cpu_limit(cgroup),
     }
 
 
@@ -163,15 +249,22 @@ def collect_indexes(digests, runner=subprocess.run):
 class Collector:
     """Menyimpan kapan ukuran terakhir diambil; ukuran dan digest ikut heartbeat hanya sekali sehari."""
 
-    def __init__(self, clock, runner=subprocess.run):
+    def __init__(self, clock, runner=subprocess.run, process=collect_process):
         self.clock = clock
         self.runner = runner
+        self.process = process
         self.last_sizes_at = None
 
     def payload(self):
         sample = collect_sample(self.runner)
         if sample is None:
             return None
+        try:
+            process = self.process()
+        except Exception:    # noqa: BLE001 - metrik proses tidak boleh menghalangi heartbeat
+            process = None
+        if process is not None:
+            sample["process"] = process
         now = self.clock()
         if self.last_sizes_at is None or now - self.last_sizes_at >= SIZE_INTERVAL_SECONDS:
             sizes = collect_sizes(self.runner)

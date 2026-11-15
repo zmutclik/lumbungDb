@@ -40,6 +40,16 @@ class MetricsSizes(BaseModel):
     tables: list[dict] = Field(default_factory=list, max_length=10)
 
 
+class ProcessIn(BaseModel):
+    """CPU dan memori proses mariadbd dari /proc di container (agen a4 ke atas)."""
+    model_config = ConfigDict(extra="ignore")
+
+    cpu_seconds: float = Field(ge=0)            # utime+stime kumulatif sejak mariadbd mulai
+    rss_bytes: int = Field(ge=0)
+    memory_limit: int | None = Field(default=None, gt=0)   # batas cgroup, atau MemTotal bila tanpa batas
+    cpus: float | None = Field(default=None, gt=0, le=4096)  # core yang boleh dipakai container
+
+
 class MetricsIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -49,6 +59,7 @@ class MetricsIn(BaseModel):
     sizes: MetricsSizes | None = None
     digests: list[dict] | None = Field(default=None, max_length=10)
     indexes: list[dict] | None = Field(default=None, max_length=100)
+    process: ProcessIn | None = None
 
 
 class HeartbeatIn(BaseModel):

@@ -234,6 +234,7 @@ h2.section { font-size: 15px; margin: 24px 0 8px; }
 /* Ubin ringkasan */
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .tiles-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tiles-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; color: inherit; }
 a.tile:hover { border-color: var(--line-3); text-decoration: none; }
 .tile small { color: var(--text-3); font-size: 12px; }

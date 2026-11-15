@@ -42,6 +42,8 @@ async def _sample(db: AsyncSession, container: str, now: datetime, metrics: Metr
         return
     data = {name: metrics.status[name] for name in SAMPLE_NAMES if name in metrics.status}
     data["max_connections"] = metrics.max_connections
+    if metrics.process is not None:
+        data.update(metrics.process.model_dump(exclude_none=True))
     stmt = insert(StatusSample).values(container=container, at=minute_start(now), uptime=uptime, data=data)
     await db.execute(stmt.on_duplicate_key_update({"uptime": stmt.inserted.uptime, "data": stmt.inserted.data}))
 

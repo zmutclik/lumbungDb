@@ -131,3 +131,48 @@ def test_payload_carries_indexes_with_digests(metrics):
     outputs = {**OUTPUTS, "events_statements_summary_by_digest": DIGEST_FULL, "information_schema.STATISTICS": INDEXES}
     sample = metrics.Collector(lambda: 1000.0, fake(outputs)).payload()
     assert sample["digests"][0]["no_index_used"] == 7 and sample["indexes"][0]["table"] == "pasien"
+
+
+# ---------- CPU dan memori mariadbd ----------
+def fake_proc(root, comm="mariadbd", cgroup_files=None):
+    proc, cgroup = root / "proc", root / "cgroup"
+    (proc / "1").mkdir(parents=True)
+    (proc / "1" / "comm").write_text("custom-entrypoi\n")
+    (proc / "self").mkdir()
+    (proc / "57").mkdir()
+    (proc / "57" / "comm").write_text(comm + "\n")
+    # utime=1500 dan stime=500 tick (field 14 dan 15); nama berspasi tidak menggeser field
+    rest = ["S"] + ["0"] * 10 + ["1500", "500"] + ["0"] * 30
+    (proc / "57" / "stat").write_text(f"57 ({comm} x) " + " ".join(rest) + "\n")
+    (proc / "57" / "status").write_text("Name:\tmariadbd\nVmRSS:\t  204800 kB\n")
+    (proc / "meminfo").write_text("MemTotal:       8388608 kB\nMemFree:  100 kB\n")
+    cgroup.mkdir()
+    for name, text in (cgroup_files or {}).items():
+        (cgroup / name).write_text(text)
+    return str(proc), str(cgroup)
+
+
+def test_process_reads_cpu_and_rss_of_mariadbd(metrics, tmp_path, monkeypatch):
+    monkeypatch.setattr(metrics.os, "sysconf", lambda name: 100)
+    proc, cgroup = fake_proc(tmp_path, cgroup_files={"memory.max": "2147483648\n", "cpu.max": "150000 100000\n"})
+    sample = metrics.collect_process(proc, cgroup)
+    assert sample["cpu_seconds"] == 20.0 and sample["rss_bytes"] == 200 * 1024 * 1024
+    assert sample["memory_limit"] == 2 * 1024 ** 3 and sample["cpus"] <= 1.5
+
+
+def test_process_without_limits_uses_machine_memory(metrics, tmp_path):
+    proc, cgroup = fake_proc(tmp_path, cgroup_files={"memory.max": "max\n", "cpu.max": "max 100000\n"})
+    sample = metrics.collect_process(proc, cgroup)
+    assert sample["memory_limit"] == 8 * 1024 ** 3 and sample["cpus"] >= 1
+
+
+def test_process_missing_does_not_block_payload(metrics, tmp_path):
+    proc, cgroup = fake_proc(tmp_path, comm="bash")
+    assert metrics.collect_process(proc, cgroup) is None
+
+    def broken():
+        raise RuntimeError("proc rusak")
+    payload = metrics.Collector(lambda: 1000.0, fake(OUTPUTS), process=broken).payload()
+    assert payload["status"]["Threads_connected"] == 12 and "process" not in payload
+    stub = {"cpu_seconds": 1.0, "rss_bytes": 10, "memory_limit": None, "cpus": 2.0}
+    assert metrics.Collector(lambda: 1000.0, fake(OUTPUTS), process=lambda: stub).payload()["process"] == stub

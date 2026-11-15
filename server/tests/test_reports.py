@@ -303,6 +303,17 @@ def test_rates_use_uptime_and_break_on_restart_or_gap():
     assert points[2].rates["qps"] == pytest.approx(1)
 
 
+def test_cpu_is_percent_of_container_cores_and_memory_is_rss():
+    start = datetime(2026, 11, 15, 1, 0)
+    samples = [sample(start, 1000, cpu_seconds=10.0, rss_bytes=100, cpus=2.0),
+               sample(start + timedelta(minutes=1), 1060, cpu_seconds=40.0, rss_bytes=300, cpus=2.0),   # 30/60/2 = 25%
+               sample(start + timedelta(minutes=2), 1120)]                                            # agen lama
+    points = activity.rate_points(samples)
+    assert points[0].rates["cpu"] == pytest.approx(25) and points[0].rates["rss"] == 300
+    assert "cpu" not in points[1].rates and "rss" not in points[1].rates
+    assert activity.nice_bytes_scale(300 * 1024 ** 2) == (400 * 1024 ** 2, 100 * 1024 ** 2)
+
+
 def test_nice_scale_and_number_format():
     assert activity.nice_scale(187) == (200, 50)
     assert activity.nice_scale(0.3) == (0.4, 0.1)
@@ -331,10 +342,13 @@ async def test_heartbeat_stores_one_sample_per_minute_and_purges_after_a_day(cli
     status = {**metrics()["status"], "Questions": 50, "Com_select": 9}
     await beat(client, agent, metrics={**metrics(), "status": status})
     status["Questions"] = 80
-    await beat(client, agent, metrics={**metrics(), "status": status})
+    process = {"cpu_seconds": 12.5, "rss_bytes": 4096, "memory_limit": None, "cpus": 2.0}
+    await beat(client, agent, metrics={**metrics(), "status": status, "process": process})
     async with async_session_factory() as db:
         rows = (await db.execute(select(StatusSample))).scalars().all()
         assert len(rows) == 1 and rows[0].data["Questions"] == 80 and rows[0].data["max_connections"] == 100
+        assert rows[0].data["cpu_seconds"] == 12.5 and rows[0].data["rss_bytes"] == 4096
+        assert "memory_limit" not in rows[0].data
         now = await db.scalar(select(func.now()))
     async with async_session_factory() as db, db.begin():
         db.add(sample(now - timedelta(hours=25), 10))
@@ -350,7 +364,8 @@ async def test_container_page_shows_empty_activity_without_samples(client, agent
     await login(client)
     page = (await client.get(f"/containers/{NAME}")).text
     assert "Aktivitas MariaDB" in page and "Belum ada cuplikan aktivitas" in page
-    assert page.count("Perlu dua heartbeat") == 4 and 'class="chart act-chart"' not in page
+    assert page.count("Perlu dua heartbeat") == 6 and 'class="chart act-chart"' not in page
+    assert page.count("agen versi a4 atau lebih baru") == 2
 
 
 async def test_container_page_shows_activity(client, agent):
@@ -359,9 +374,12 @@ async def test_container_page_shows_activity(client, agent):
         await db.execute(delete(StatusSample))
         now = await db.scalar(select(func.now()))
         for m in range(5):
-            db.add(sample(now - timedelta(minutes=4 - m), 1000 + 60 * m, Questions=600 * m, Bytes_sent=61440 * m))
+            db.add(sample(now - timedelta(minutes=4 - m), 1000 + 60 * m, Questions=600 * m, Bytes_sent=61440 * m,
+                          cpu_seconds=30.0 * m, cpus=4.0, rss_bytes=512 * 1024 ** 2, memory_limit=2 * 1024 ** 3))
     await make_user()
     await login(client)
     page = (await client.get(f"/containers/{NAME}")).text
-    assert "Aktivitas MariaDB" in page and page.count('class="chart act-chart"') == 4
+    assert "Aktivitas MariaDB" in page and page.count('class="chart act-chart"') == 6
     assert "<b>10,0</b>" in page and "1,0 KB/dtk" in page and "<b>99,00%</b>" in page
+    assert "<b>12,5%</b>" in page and "dari 4 core" in page                       # 30 dtk CPU / 60 dtk / 4 core
+    assert "<b>512,0 MB</b>" in page and "dari 2,0 GB (25,0%)" in page

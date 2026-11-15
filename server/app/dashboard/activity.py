@@ -1,6 +1,7 @@
 """Aktivitas MariaDB per menit untuk halaman container: tile angka terkini dan grafik SVG satu jam terakhir.
 
-Laju per detik = selisih dua cuplikan berurutan dibagi selisih Uptime. Uptime mundur atau penghitung turun berarti
+Laju per detik = selisih dua cuplikan berurutan dibagi selisih Uptime. CPU mariadbd memakai cara yang sama (detik CPU per
+detik, dibagi jumlah core container); memori adalah RSS mariadbd saat cuplikan. Uptime mundur atau penghitung turun berarti
 MariaDB restart: titik itu dilewati sehingga garis terputus. Celah heartbeat lebih dari GAP juga memutus garis.
 Grafik digambar di server sebagai path SVG (CSP melarang script inline, dan tidak perlu library grafik)."""
 import math
@@ -26,6 +27,7 @@ PLOT_W, PLOT_H = WIDTH - LEFT - RIGHT, HEIGHT - TOP - BOTTOM
 RATES = {
     "qps": "Questions", "sessions": "Connections", "bytes_in": "Bytes_received", "bytes_out": "Bytes_sent",
     "select": "Com_select", "insert": "Com_insert", "update": "Com_update", "delete": "Com_delete",
+    "cpu": "cpu_seconds",
 }
 
 
@@ -53,6 +55,10 @@ def tick_label(value: float, step: float) -> str:
 
 def per_second_bytes(value: float | None) -> str:
     return "—" if value is None else f"{filesize(int(round(value)))}/dtk"
+
+
+def percent(value: float | None) -> str:
+    return "—" if value is None else f"{number(value)}%"
 
 
 def uptime_text(seconds: int | None) -> str:
@@ -91,7 +97,14 @@ def rate_points(samples: list[StatusSample]) -> list[Point | None]:
                     restarted = True
                     break
                 rates[key] = delta / elapsed
-        points.append(None if restarted else Point(after.at, rates))
+        if restarted:
+            points.append(None)
+            continue
+        if "cpu" in rates:     # detik CPU per detik → persen dari seluruh core yang boleh dipakai container
+            rates["cpu"] = rates["cpu"] / (after.data.get("cpus") or 1) * 100
+        if "rss_bytes" in after.data:
+            rates["rss"] = after.data["rss_bytes"]
+        points.append(Point(after.at, rates))
     return points
 
 
@@ -112,11 +125,21 @@ class Chart:
     x_ticks: list[tuple[float, str]] = field(default_factory=list)
     hits: list[tuple[float, float, str]] = field(default_factory=list)   # x, lebar, teks tooltip
     empty: bool = True
+    agent: str = "a3"   # versi agen terendah yang mengirim data grafik ini
     width: int = WIDTH
     height: int = HEIGHT
     left: int = LEFT
     right_edge: int = WIDTH - RIGHT
     bottom_y: int = TOP + PLOT_H
+
+
+def nice_bytes_scale(peak: float) -> tuple[float, float]:
+    """nice_scale dalam satuan 1024 supaya label sumbu byte bulat: 0, 256 MB, 512 MB, bukan 476,8 MB."""
+    unit = 1.0
+    while peak / unit >= 1024 and unit < 1024 ** 4:
+        unit *= 1024
+    top, step = nice_scale(peak / unit)
+    return top * unit, step * unit
 
 
 def nice_scale(peak: float) -> tuple[float, float]:
@@ -148,9 +171,11 @@ def _smooth(points: list[tuple[float, float]], floor_y: float, top_y: float) -> 
 
 
 def build_chart(title: str, points: list[Point | None], lines: list[tuple[str, str]], fmt, start: datetime,
-                end: datetime, area: bool = False, axis_fmt=None) -> Chart:
-    """lines: (kunci laju, label). Satu sumbu y untuk semua garis. fmt untuk tooltip, axis_fmt untuk label sumbu."""
-    chart = Chart(title, [Series(f"s{i + 1}", label) for i, (_, label) in enumerate(lines)])
+                end: datetime, area: bool = False, axis_fmt=None, axis_suffix: str = "", binary: bool = False,
+                agent: str = "a3") -> Chart:
+    """lines: (kunci laju, label). Satu sumbu y untuk semua garis. fmt untuk tooltip, axis_fmt untuk label sumbu
+    (bawaan tick_label ditambah axis_suffix). binary: garis bantu kelipatan 1024 untuk nilai byte."""
+    chart = Chart(title, [Series(f"s{i + 1}", label) for i, (_, label) in enumerate(lines)], agent=agent)
     span = (end - start).total_seconds()
 
     def x_of(at: datetime) -> float:
@@ -158,13 +183,14 @@ def build_chart(title: str, points: list[Point | None], lines: list[tuple[str, s
 
     valid = [p for p in points if p is not None and p.at >= start and any(k in p.rates for k, _ in lines)]
     peak = max((p.rates.get(k, 0) for p in valid for k, _ in lines), default=0)
-    top, step = nice_scale(peak)
+    top, step = nice_bytes_scale(peak) if binary else nice_scale(peak)
     floor_y = TOP + PLOT_H
 
     def y_of(value: float) -> float:
         return floor_y - PLOT_H * value / top
 
-    chart.y_ticks = [(y_of(step * i), axis_fmt(step * i) if axis_fmt else tick_label(step * i, step)) for i in range(5)]
+    chart.y_ticks = [(y_of(step * i), axis_fmt(step * i) if axis_fmt else tick_label(step * i, step) + axis_suffix)
+                     for i in range(5)]
     tick_every = timedelta(minutes=10)
     first = start.replace(second=0, microsecond=0) + timedelta(minutes=(10 - start.minute % 10) % 10)
     tick = first
@@ -231,8 +257,15 @@ async def load(db: AsyncSession, container: str, now: datetime) -> Activity:
     requests, reads = data.get("Innodb_buffer_pool_read_requests"), data.get("Innodb_buffer_pool_reads")
     hit = rules.hit_ratio(requests, reads) if requests else None
     connected, limit = data.get("Threads_connected"), data.get("max_connections")
+    cpus, rss, memory_limit = data.get("cpus"), data.get("rss_bytes"), data.get("memory_limit")
+    cpu_note = f"dari {cpus:g} core, rata-rata menit".replace(".", ",") if cpus else "rata-rata menit terakhir"
+    memory_note = "RSS proses mariadbd"
+    if rss is not None and memory_limit:
+        memory_note = f"dari {filesize(memory_limit)} ({number(rss / memory_limit * 100)}%)"
     tiles = [
         Tile("Kueri / detik", number(last_rates.get("qps")), "rata-rata menit terakhir"),
+        Tile("CPU MariaDB", percent(last_rates.get("cpu")), cpu_note),
+        Tile("Memori MariaDB", filesize(rss), memory_note),
         Tile("Koneksi", f"{count(connected)} / {count(limit)}" if connected is not None else "—",
              "tersambung / max_connections"),
         Tile("Thread berjalan", count(data.get("Threads_running")), "sedang mengeksekusi"),
@@ -245,8 +278,12 @@ async def load(db: AsyncSession, container: str, now: datetime) -> Activity:
     charts = [
         build_chart("Kueri per detik", points, [("qps", "Kueri")], number, start, now, area=True),
         build_chart("Sesi baru per detik", points, [("sessions", "Sesi")], number, start, now, area=True),
+        build_chart("CPU MariaDB", points, [("cpu", "CPU")], percent, start, now, area=True, axis_suffix="%",
+                    agent="a4"),
+        build_chart("Memori MariaDB (RSS)", points, [("rss", "Memori")], lambda v: filesize(int(round(v))), start, now,
+                    area=True, axis_fmt=lambda v: filesize(int(round(v))), binary=True, agent="a4"),
         build_chart("Trafik jaringan per detik", points, [("bytes_in", "Masuk"), ("bytes_out", "Keluar")],
-                    per_second_bytes, start, now, axis_fmt=lambda v: filesize(int(round(v)))),
+                    per_second_bytes, start, now, axis_fmt=lambda v: filesize(int(round(v))), binary=True),
         build_chart("Perintah per detik", points,
                     [("select", "SELECT"), ("insert", "INSERT"), ("update", "UPDATE"), ("delete", "DELETE")],
                     number, start, now),
