@@ -1,6 +1,6 @@
 # Status progres LumbungDB
 
-Diperbarui 4 November 2026 (commit `e9001ae`). Rincian rancangan ada di `dokumen_pengembangan.md`; berkas ini hanya
+Diperbarui 15 November 2026 (commit `7f05039`). Rincian rancangan ada di `dokumen_pengembangan.md`; berkas ini hanya
 merangkum **apa yang masih kurang** supaya mudah dilanjutkan.
 
 ## Sudah ada kodenya
@@ -68,4 +68,8 @@ Semua uji memakai folder lokal sebagai NAS, Telegram tiruan, dan data contoh. Be
 - Tes server: container `lumbungtest-db` (lihat README) dan `TEST_DATABASE_URL=...lumbung_test`.
 - Hapus container uji dengan `docker rm -f -v` supaya volume anonim tidak menumpuk: image `lumbungdb` membuat redo log
   sekitar 3 GB per container, dan disk host sempat penuh karena itu.
+- Nama container compose tetap tanpa akhiran `-1` (15 November 2026): stack utama `<project>-<service>` dengan project
+  bawaan `lumbungdb` (`lumbungdb-web`, `lumbungdb-db`, dst.), runner `lumbung-runner`. e2e tetap memakai
+  `-p lumbunge2e`. Stack yang dulu dijalankan dari folder bernama lain akan mendapat volume `lumbungdb_lumbung_state`
+  baru; e2e belum dijalankan ulang sesudah perubahan ini.
 - Jangan menaruh kunci API di repo; `AI_API_KEY` hanya di `.env`.
