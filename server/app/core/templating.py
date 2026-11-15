@@ -97,6 +97,56 @@ def filesize(value: int | None) -> str:
         size /= 1024
     return f"{size:.1f} TB".replace(".", ",")
 
+def _is_number(value) -> bool:
+    """Juga menolak Undefined Jinja: kunci yang tidak ada di snapshot laporan tampil sebagai "—"."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def angka(value: float | None) -> str:
+    """45191.2 → "45.191"; 3.456 → "3,46". Pemisah ribuan titik, desimal koma."""
+    if not _is_number(value):
+        return "—"
+    if abs(value) >= 100:
+        return f"{value:,.0f}".replace(",", ".")
+    if abs(value) >= 10:
+        return f"{value:.1f}".replace(".", ",")
+    return f"{value:.2f}".replace(".", ",")
+
+
+def bulat(value: float | None) -> str:
+    """Nilai bulat (koneksi, thread, jumlah kueri): 9999 → "9.999"."""
+    return f"{int(round(value)):,}".replace(",", ".") if _is_number(value) else "—"
+
+
+def persen(value: float | None) -> str:
+    return f"{angka(value)}%" if _is_number(value) else "—"
+
+
+def ukuran(value: float | None) -> str:
+    """Byte dari snapshot JSON (bisa float) → "1,5 GB"; kosong → "—"."""
+    return filesize(int(value)) if _is_number(value) else "—"
+
+
+def tanggal_iso(value: str | None) -> str:
+    """Waktu UTC ISO di snapshot laporan → "30 Okt 08:15" di zona tampilan."""
+    return tanggal(datetime.fromisoformat(value)) if value else "—"
+
+
+def hari_iso(value: str | None) -> str:
+    """Tanggal ISO (sudah lokal) → "3 Nov 2026"."""
+    if not value:
+        return "—"
+    day = datetime.fromisoformat(value)
+    return f"{day.day} {_MONTHS[day.month - 1]} {day.year}"
+
+
+def persen_ubah(value: float | None) -> str:
+    """Perubahan terhadap periode sebelumnya: 12.34 → "+12,3%"."""
+    if not _is_number(value):
+        return "—"
+    return f"{value:+.1f}%".replace(".", ",")
+
+
 templates = Jinja2Templates(
     directory=[APP_DIR / "templates", *sorted(APP_DIR.glob("*/templates"))],
     context_processors=[_common_context],
@@ -108,6 +158,13 @@ templates.env.filters["tanggal"] = tanggal
 templates.env.filters["tanggal_saja"] = tanggal_saja
 templates.env.filters["ago"] = ago
 templates.env.filters["filesize"] = filesize
+templates.env.filters["angka"] = angka
+templates.env.filters["bulat"] = bulat
+templates.env.filters["persen_ubah"] = persen_ubah
+templates.env.filters["persen"] = persen
+templates.env.filters["ukuran"] = ukuran
+templates.env.filters["tanggal_iso"] = tanggal_iso
+templates.env.filters["hari_iso"] = hari_iso
 templates.env.globals["durasi"] = durasi
 templates.env.globals["agent_update"] = agent_update
 templates.env.globals["runner_update"] = runner_update

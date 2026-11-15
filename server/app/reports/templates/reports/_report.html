@@ -1,7 +1,7 @@
 {% import "dashboard/_macros.html" as ui %}
 <div>
 <div class="page-head"><div>
-  <h1>Laporan {{ "harian" if report.kind == "daily" else "mingguan" }} {{ report.period_start | tanggal_saja }}</h1>
+  <h1>Laporan {{ report_title(report) if report.kind in period_kinds else (("harian" if report.kind == "daily" else "mingguan") ~ " " ~ (report.period_start | tanggal_saja)) }}</h1>
   <div class="sub">Diterbitkan {{ report.created_at | tanggal }}. {{ report.data.checked }} container diperiksa.
     <a href="/reports?jenis={{ report.kind }}">Semua laporan</a></div>
 </div></div>
@@ -14,6 +14,7 @@
 {% elif ai_enabled %}
 <div class="banner banner-info">Ringkasan AI belum dibuat untuk laporan ini. <button class="btn" hx-post="/reports/{{ report.id }}/ai" hx-swap="none">Buat sekarang</button></div>
 {% endif %}
+{% if report.kind in period_kinds %}{% include "reports/_report_period.html" %}{% else %}
 {% for section in report.data.containers %}
 {% set stats = section.stats %}
 <section class="card card-pad rep-sec">
@@ -39,4 +40,5 @@
 {% else %}
 <div class="empty"><b>Tidak ada masalah</b>Semua container sehat pada periode ini.</div>
 {% endfor %}
+{% endif %}
 </div>

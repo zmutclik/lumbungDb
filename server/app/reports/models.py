@@ -42,7 +42,7 @@ class Report(Base):
     __table_args__ = (UniqueConstraint("kind", "period_start", name="uq_reports_period"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    kind: Mapped[str] = mapped_column(String(10))                 # daily | weekly
+    kind: Mapped[str] = mapped_column(String(10))                 # daily | weekly | monthly | quarterly | semiannual | yearly
     period_start: Mapped[datetime] = mapped_column()
     period_end: Mapped[datetime] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

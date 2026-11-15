@@ -195,6 +195,12 @@ h2.section { font-size: 15px; margin: 24px 0 8px; }
 .tab { padding: 8px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--text-2); font-weight: 500; }
 .tab:hover { color: var(--text); text-decoration: none; }
 .tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs-scroll { overflow-x: auto; scrollbar-width: none; }
+.tabs-scroll .tab { white-space: nowrap; }
+.rep-period .kv { margin: 10px 0; }
+.rep-period .kv b { font-variant-numeric: tabular-nums; }
+.rep-period h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text-2); }
+@media (max-width: 760px) { .rep-period .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .qa-item { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .qa-answer { white-space: pre-wrap; margin: 4px 0; }
 .pre-wrap { white-space: pre-wrap; }

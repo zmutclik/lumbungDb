@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.templating import angka as number
+from app.core.templating import bulat as count
 from app.core.templating import filesize, localtime
 from app.reports import rules
 from app.reports.models import StatusSample
@@ -29,22 +31,6 @@ RATES = {
     "select": "Com_select", "insert": "Com_insert", "update": "Com_update", "delete": "Com_delete",
     "cpu": "cpu_seconds",
 }
-
-
-def number(value: float | None) -> str:
-    """45191.2 → "45.191"; 3.456 → "3,46". Pemisah ribuan titik, desimal koma."""
-    if value is None:
-        return "—"
-    if abs(value) >= 100:
-        return f"{value:,.0f}".replace(",", ".")
-    if abs(value) >= 10:
-        return f"{value:.1f}".replace(".", ",")
-    return f"{value:.2f}".replace(".", ",")
-
-
-def count(value: int | None) -> str:
-    """Nilai bulat (koneksi, thread): 9999 → "9.999"."""
-    return "—" if value is None else f"{int(value):,}".replace(",", ".")
 
 
 def tick_label(value: float, step: float) -> str:

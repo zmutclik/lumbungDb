@@ -2,7 +2,6 @@
 ringkasan ini tidak bisa mengubah atau menekan alert. Bila penyedia gagal, laporan tetap terbit tanpa ringkasan."""
 import json
 import logging
-from datetime import UTC
 
 import httpx
 from sqlalchemy import select
@@ -14,6 +13,7 @@ from app.ai import queries
 from app.ai.providers import Provider, ProviderError, get_provider
 from app.backup_control.models import BackupRequest
 from app.containers.models import Heartbeat
+from app.reports import period as report_period
 from app.reports.models import Report
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,10 @@ MAX_TEXT = 4000
 # Hanya angka dan metadata. Daftar putih: kunci lain di stats laporan tidak ikut terkirim.
 STAT_KEYS = ("connections_peak", "max_connections", "refused", "hit_ratio", "slow_queries", "deadlocks", "disk_free",
              "disk_full_days", "full_size")
+# Laporan bulanan sampai tahunan (app/reports/period.py)
+PERIOD_STAT_KEYS = ("coverage", "days", "queries", "qps_avg", "qps_peak", "cpu_avg", "cpu_peak", "rss_avg", "rss_max",
+                    "memory_limit", "threads_max", "max_connections", "slow_queries", "deadlocks", "conn_refused",
+                    "restarts", "hit_ratio", "size_start", "size_end", "size_growth", "disk_free_min", "full_size")
 
 SYSTEM = (
     "Kamu membantu admin database rumah sakit membaca laporan kesehatan MariaDB. Masukanmu JSON berisi angka, temuan "
@@ -45,19 +49,26 @@ async def _digests(db: AsyncSession, container: str) -> list[dict]:
 async def build_input(db: AsyncSession, report: Report) -> dict:
     data = report.data
     weekly = report.kind == "weekly"
+    long_period = report.kind in report_period.KINDS
+    keys = PERIOD_STAT_KEYS if long_period else STAT_KEYS
     containers = []
     for section in data.get("containers", []):
+        stats = section.get("stats", {})
         entry = {"name": section["name"],
                  "findings": [{"level": f["level"], "text": f["text"]} for f in section.get("findings", [])],
-                 "stats": {k: _number(section.get("stats", {}).get(k)) for k in STAT_KEYS
-                           if _number(section.get("stats", {}).get(k)) is not None}}
+                 "stats": {k: _number(stats.get(k)) for k in keys if _number(stats.get(k)) is not None}}
+        if long_period:
+            entry["perubahan_persen"] = {k: _number(v) for k, v in (stats.get("change") or {}).items()
+                                         if k in report_period.COMPARE and _number(v) is not None}
+            tests = stats.get("restore_tests") or {}
+            entry["uji_restore"] = {k: _number(tests.get(k)) for k in ("passed", "failed", "skipped")}
         if weekly:
             entry["growth"] = [{"database": g["database"], "bytes": _number(g.get("bytes")), "delta": _number(g.get("delta"))}
                                for g in (section.get("stats", {}).get("growth") or [])[:5]]
             entry["queries"] = await _digests(db, section["name"])
         containers.append(entry)
-    start = report.period_start.replace(tzinfo=UTC)
-    return {"jenis": "harian" if report.kind == "daily" else "mingguan", "periode_mulai": start.date().isoformat(),
+    jenis = {"daily": "harian", "weekly": "mingguan", **report_period.LABELS}[report.kind]
+    return {"jenis": jenis, "periode_mulai": report_period.local_date(report.period_start).isoformat(),
             "container_diperiksa": data.get("checked"), "container_bermasalah": containers}
 
 

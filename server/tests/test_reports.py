@@ -87,10 +87,12 @@ def test_due_periods(monkeypatch):
     monkeypatch.setattr(reports.settings, "REPORT_HOUR", 7)
     # Senin 2 Nov 2026 07:30 WIB = 00:30 UTC
     kinds = [kind for kind, _, _ in reports.due_periods(datetime(2026, 11, 2, 0, 30))]
-    assert kinds == ["daily", "weekly"]
-    assert reports.due_periods(datetime(2026, 11, 1, 22, 0)) == []        # 05:00 WIB, belum jamnya
+    assert kinds == ["daily", "weekly", "monthly"]      # bulanan Oktober masih dalam PERIOD_LATE_DAYS
+    # 05:00 WIB, belum jamnya; bulanan sudah terbit sejak 1 Nov 07:00 sehingga tetap jatuh tempo (idempoten)
+    assert [k for k, _, _ in reports.due_periods(datetime(2026, 11, 1, 22, 0))] == ["monthly"]
     daily = reports.due_periods(datetime(2026, 11, 3, 0, 30))               # Selasa
-    assert [k for k, _, _ in daily] == ["daily"]
+    assert [k for k, _, _ in daily] == ["daily", "monthly"]
+    assert [k for k, _, _ in reports.due_periods(datetime(2026, 11, 10, 0, 30))] == ["daily"]
     assert daily[0][1:] == (datetime(2026, 11, 1, 17, 0), datetime(2026, 11, 2, 17, 0))
 
 

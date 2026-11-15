@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     REPORT_DISK_WARN_DAYS: int = 14
     REPORT_DISK_BAD_DAYS: int = 7
     REPORT_FORECAST_DAYS: int = 14              # riwayat disk yang dipakai regresi
+    # Laporan bulanan sampai tahunan dari rekap harian
+    REPORT_COVERAGE_MIN: int = 90               # persen menit periode yang punya metrik
+    REPORT_CPU_AVG_WARN: int = 70               # persen CPU rata-rata dari core container
+    REPORT_MEMORY_WARN_PERCENT: int = 90        # RSS puncak mariadbd terhadap batas memori container
 
     # Lapisan AI (tahap 4). Mati bila AI_PROVIDER kosong atau "none". Hanya metrik teragregasi dan metadata yang dikirim;
     # query dinormalisasi lebih dulu (app/ai/normalize.py). Penyedia: claude | ollama | fake

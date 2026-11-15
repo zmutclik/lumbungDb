@@ -1,4 +1,5 @@
-"""Menyusun dan menerbitkan laporan harian dan mingguan, serta perkiraan disk untuk alert."""
+"""Menyusun dan menerbitkan laporan harian, mingguan, dan periode panjang (app/reports/period.py), serta perkiraan disk
+untuk alert."""
 import logging
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -13,7 +14,7 @@ from app.backups.models import Backup
 from app.containers.models import Container, Heartbeat
 from app.core.config import settings
 from app.notifications import service as notifications
-from app.reports import ingest, rules
+from app.reports import ingest, period, rules
 from app.reports.models import Metric, Report
 
 logger = logging.getLogger(__name__)
@@ -28,12 +29,12 @@ def due_periods(now: datetime) -> list[tuple[str, datetime, datetime]]:
     """Periode yang sudah boleh terbit menurut jam lokal. Harian: kemarin. Mingguan: Senin sampai Minggu lalu."""
     local = now.replace(tzinfo=UTC).astimezone(ZoneInfo(settings.DISPLAY_TIMEZONE))
     if local.hour < settings.REPORT_HOUR:
-        return []
+        return period.due_periods(now)       # periode panjang yang terlambat tetap jatuh tempo
     today = local.replace(hour=0, minute=0, second=0, microsecond=0)
     periods = [("daily", _utc(today - timedelta(days=1)), _utc(today))]
     if local.weekday() == 0:
         periods.append(("weekly", _utc(today - timedelta(days=7)), _utc(today)))
-    return periods
+    return periods + period.due_periods(now)
 
 
 async def _sum(db: AsyncSession, container: str, name: str, start: datetime, end: datetime) -> float:
@@ -141,8 +142,11 @@ async def build(db: AsyncSession, kind: str, start: datetime, end: datetime) -> 
     for row in rows:
         if row.name not in entries.active:
             continue
-        sections.append(await _container_section(db, row.name, row.registered_at, start, end, kind,
-                                                 row.name in heartbeats))
+        if kind in period.KINDS:
+            sections.append(await period.section(db, row.name, row.registered_at, kind, start, end))
+        else:
+            sections.append(await _container_section(db, row.name, row.registered_at, start, end, kind,
+                                                     row.name in heartbeats))
     if kind == "daily":
         shown = [s for s in sections if s["findings"]]
     else:
@@ -151,14 +155,24 @@ async def build(db: AsyncSession, kind: str, start: datetime, end: datetime) -> 
             "checked": len(sections), "containers": shown}
 
 
+LABELS = {"daily": "harian", "weekly": "mingguan", **period.LABELS}
+
+
+def title(report: Report) -> str:
+    """"harian 14-11-2026", "bulanan November 2026", "tahunan 2026"."""
+    if report.kind in period.KINDS:
+        return f"{LABELS[report.kind]} {period.period_label(report.kind, report.period_start)}"
+    day = report.period_start.replace(tzinfo=UTC).astimezone(ZoneInfo(settings.DISPLAY_TIMEZONE)).strftime("%d-%m-%Y")
+    return f"{LABELS[report.kind]} {day}"
+
+
 def summary_text(report: Report) -> str:
     data = report.data
-    label = "harian" if report.kind == "daily" else "mingguan"
-    day = report.period_start.replace(tzinfo=UTC).astimezone(ZoneInfo(settings.DISPLAY_TIMEZONE)).strftime("%d-%m-%Y")
+    heading = title(report)
     problems = [s for s in data["containers"] if s["findings"]]
     if not problems:
-        return f"Laporan {label} {day}: tidak ada masalah di {data['checked']} container."
-    lines = [f"Laporan {label} {day}: {len(problems)} dari {data['checked']} container bermasalah."]
+        return f"Laporan {heading}: tidak ada masalah di {data['checked']} container."
+    lines = [f"Laporan {heading}: {len(problems)} dari {data['checked']} container bermasalah."]
     for section in problems:
         for finding in section["findings"][:3]:
             lines.append(f"- {section['name']}: {finding['text']}")

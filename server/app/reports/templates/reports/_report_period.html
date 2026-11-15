@@ -1,0 +1,68 @@
+{# Laporan bulanan sampai tahunan dari rekap harian (app/reports/period.py). Perubahan dibanding periode sebelumnya
+   yang sama panjang tidak diberi warna: kueri yang naik belum tentu buruk. #}
+{% macro cell(label, value, note=none) %}<div><small>{{ label }}</small><b>{{ value }}</b>{% if note %}<small>{{ note }}</small>{% endif %}</div>{% endmacro %}
+{% macro chg(stats, key) %}{% if stats.change and stats.change[key] is defined %}{{ stats.change[key] | persen_ubah }} dari periode lalu{% endif %}{% endmacro %}
+{% macro at(value) %}{% if value %}{{ value | tanggal_iso }}{% endif %}{% endmacro %}
+{% set month_names = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"] %}
+<div class="rep-period">
+{% for section in report.data.containers %}
+{% set s = section.stats %}
+<section class="card card-pad rep-sec">
+  <h2><a href="/containers/{{ section.name }}">{{ section.name }}</a></h2>
+  {% if section.findings %}
+  <ul>{% for finding in section.findings %}<li class="{{ 'bad' if finding.level == 'bad' else 'warn' }}">{{ finding.text }}</li>{% endfor %}</ul>
+  {% else %}<p class="muted">Tidak ada masalah.</p>{% endif %}
+  {% if s.days %}
+  <h3>Beban</h3>
+  <div class="kv">
+    {{ cell("Total kueri", s.queries | bulat, chg(s, "queries")) }}
+    {{ cell("Rata-rata kueri/dtk", s.qps_avg | angka, chg(s, "qps_avg")) }}
+    {{ cell("Puncak kueri/dtk", s.qps_peak | angka, at(s.qps_peak_at)) }}
+    {{ cell("Hari tersibuk", s.busiest_day | hari_iso, (s.busiest_queries | bulat) ~ " kueri" if s.busiest_day else none) }}
+    {{ cell("SELECT", s.select | bulat) }}
+    {{ cell("INSERT", s.insert | bulat) }}
+    {{ cell("UPDATE", s.update | bulat) }}
+    {{ cell("DELETE", s.delete | bulat) }}
+    {{ cell("Sesi baru", s.sessions | bulat) }}
+    {{ cell("Data masuk", s.bytes_in | ukuran) }}
+    {{ cell("Data keluar", s.bytes_out | ukuran) }}
+    {{ cell("Koneksi puncak", (s.threads_max | bulat) ~ " / " ~ (s.max_connections | bulat), at(s.threads_max_at)) }}
+  </div>
+  <h3>Sumber daya mariadbd</h3>
+  <div class="kv">
+    {{ cell("CPU rata-rata", s.cpu_avg | persen, chg(s, "cpu_avg")) }}
+    {{ cell("CPU puncak", s.cpu_peak | persen, at(s.cpu_peak_at)) }}
+    {{ cell("Memori rata-rata", s.rss_avg | ukuran) }}
+    {{ cell("Memori puncak", (s.rss_max | ukuran) ~ ((" dari " ~ (s.memory_limit | ukuran)) if s.memory_limit and s.rss_max else ""), chg(s, "rss_max")) }}
+  </div>
+  <h3>Kesehatan dan data</h3>
+  <div class="kv">
+    {{ cell("Slow query", s.slow_queries | bulat, chg(s, "slow_queries")) }}
+    {{ cell("Deadlock", s.deadlocks | bulat) }}
+    {{ cell("Koneksi ditolak", s.conn_refused | bulat) }}
+    {{ cell("Restart MariaDB", s.restarts | bulat) }}
+    {{ cell("Hit ratio buffer pool", s.hit_ratio | persen) }}
+    {{ cell("Ukuran database akhir", s.size_end | ukuran, ((("tumbuh " ~ (s.size_growth | ukuran)) if s.size_growth >= 0 else ("turun " ~ ((-s.size_growth) | ukuran)))) if s.size_growth is defined else none) }}
+    {{ cell("Disk /backup terendah", s.disk_free_min | ukuran) }}
+    {{ cell("Full terakhir", s.full_size | ukuran) }}
+    {{ cell("Uji restore", (s.restore_tests.passed ~ " lolos, " ~ s.restore_tests.failed ~ " gagal") if s.restore_tests else "—", (s.restore_tests.skipped ~ " tidak terlaksana") if s.restore_tests and s.restore_tests.skipped else none) }}
+    {{ cell("Cakupan metrik", s.coverage | persen, s.days ~ " dari " ~ s.period_days ~ " hari") }}
+  </div>
+  {% if s.by_month %}
+  <h3>Per bulan</h3>
+  <div class="tbl-wrap"><table class="t"><thead><tr><th>Bulan</th><th>Kueri</th><th>Kueri/dtk</th><th>CPU rata-rata</th><th>CPU puncak</th><th>Memori puncak</th><th>Ukuran DB</th><th>Slow query</th><th>Restart</th><th>Cakupan</th></tr></thead><tbody>
+  {% for m in s.by_month %}
+  <tr><td>{{ month_names[m.month[5:7] | int - 1] }} {{ m.month[:4] }}</td><td>{{ m.queries | bulat }}</td><td>{{ m.qps_avg | angka }}</td>
+    <td>{{ m.cpu_avg | persen }}</td><td>{{ m.cpu_peak | persen }}</td>
+    <td>{{ m.rss_max | ukuran }}</td><td>{{ m.size_end | ukuran }}</td>
+    <td>{{ m.slow_queries | bulat }}</td><td>{{ m.restarts | bulat }}</td><td>{{ m.coverage | persen }}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% endif %}
+  {% if s.previous %}<p class="hint">Pembanding: periode sebelumnya yang sama panjang. Kueri {{ s.previous.queries | bulat }}, CPU rata-rata {{ s.previous.cpu_avg | persen }}, slow query {{ s.previous.slow_queries | bulat }}.</p>{% endif %}
+  {% endif %}
+</section>
+{% else %}
+<div class="empty"><b>Belum ada container</b>Tidak ada container aktif pada periode ini.</div>
+{% endfor %}
+</div>

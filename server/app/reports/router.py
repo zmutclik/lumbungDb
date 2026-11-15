@@ -10,6 +10,8 @@ from app.ai import service as ai_service
 from app.ai.providers import get_provider
 from app.core.database import DbSession
 from app.core.templating import render
+from app.reports import period
+from app.reports import service as report_service
 from app.reports.models import Report
 
 router = APIRouter(
@@ -24,13 +26,14 @@ async def _base(db, user, active: str) -> dict:
 
 @router.get("/reports")
 async def reports_page(request: Request, user: CurrentUserDep, db: DbSession, jenis: str = "daily"):
-    kind = jenis if jenis in ("daily", "weekly") else "daily"
+    kind = jenis if jenis in report_service.LABELS else "daily"
     base = await _base(db, user, "reports")
     rows = (await db.scalars(
         select(Report).where(Report.kind == kind).order_by(Report.period_start.desc()).limit(60))).all()
     qa = await ai_qa.history(db, user.username) if get_provider() is not None else None
     return render(request, "reports/reports.html", "reports/_reports.html",
-                  {**base, "kind": kind, "reports": rows, "qa": qa, "qa_error": None})
+                  {**base, "kind": kind, "reports": rows, "qa": qa, "qa_error": None,
+                   "labels": report_service.LABELS, "period_kinds": period.KINDS, "period_label": period.period_label})
 
 
 @router.post("/reports/ask")
@@ -59,7 +62,8 @@ async def report_page(request: Request, report_id: int, user: CurrentUserDep, db
         raise HTTPException(status_code=404, detail="Laporan tidak ada.")
     ai = await ai_service.for_report(db, report_id)
     return render(request, "reports/report.html", "reports/_report.html",
-                  {**base, "report": report, "ai": ai, "ai_enabled": get_provider() is not None})
+                  {**base, "report": report, "ai": ai, "ai_enabled": get_provider() is not None,
+                   "period_kinds": period.KINDS, "report_title": report_service.title})
 
 
 @router.post("/reports/{report_id}/ai")
