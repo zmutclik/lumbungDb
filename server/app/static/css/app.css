@@ -297,6 +297,7 @@ input.invalid { border-color: var(--bad); }
 .kv > div { background: var(--surface); padding: 10px 14px; }
 .kv small { display: block; color: var(--text-3); font-size: 12px; }
 .kv.kv-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kv.kv-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; background: var(--surface); flex-wrap: wrap; }
 .seg button { font: inherit; font-size: 13px; border: 0; background: none; padding: 6px 14px; cursor: pointer; color: var(--text-2); border-right: 1px solid var(--line); }
@@ -522,7 +523,7 @@ button.tl-cell:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 960px) { .refresh-word { display: none; } }
 @media (max-width: 860px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kv, .kv.kv-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kv, .kv.kv-3, .kv.kv-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kv > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .policy { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .policy .note { grid-column: 1 / -1; }
@@ -538,7 +539,7 @@ button.tl-cell:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 520px) {
   .nav-link { padding: 0 8px; }
   .nav-link.on::before { left: 8px; right: 8px; }
-  .tiles, .kv, .kv.kv-3, .policy { grid-template-columns: minmax(0, 1fr); }
+  .tiles, .kv, .kv.kv-3, .kv.kv-5, .policy { grid-template-columns: minmax(0, 1fr); }
   .report { padding: 18px 16px; }
   .rep-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rep-find-head { flex-direction: column; gap: 2px; }
