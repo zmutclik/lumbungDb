@@ -19,18 +19,7 @@
   <p class="hint">{% if ai_queries %}{{ ai_queries.provider }} · {{ ai_queries.model }} · {{ ai_queries.created_at | tanggal }} · diminta {{ ai_queries.requested_by }}. {% endif %}Yang dikirim hanya pola query tanpa nilai, penghitung performance_schema, dan nama index. <b>EXPLAIN belum dijalankan</b>, jadi semua saran belum terverifikasi: uji dulu di database cadangan, dan ingat index memperlambat tulis. Tidak ada yang dijalankan di database. <button class="btn" hx-post="/containers/{{ view.name }}/ai/queries" hx-swap="none" hx-disabled-elt="this">{{ "Analisis lagi" if ai_queries else "Analisis query" }}</button></p>
 </section>
 {% endif %}
-<div class="section-title"><h2>Status backup</h2><a class="small" href="/containers/{{ view.name }}/backup">Backup &amp; log ›</a></div>
 {% set info = state.info %}{% set pending = info.get("pending") or {} %}{% set upload_error = info.get("upload_error") %}
-<div class="tiles tiles-3">
-  <a class="tile{% if view.alerts | selectattr('key', 'equalto', 'full:' ~ view.name) | list %} bad{% endif %}" href="/containers/{{ view.name }}/backup"><small>Full terakhir</small><b>{{ state.last_full | ago }}</b><span class="muted">{{ state.counts.get("fullbackup", 0) }} file tersimpan</span></a>
-  <a class="tile" href="/containers/{{ view.name }}/backup"><small>Dump terlama</small><b>{{ oldest_dump | ago }}</b><span class="muted">dari {{ state.dumps | reject("equalto", "_users") | list | length }} database · umur sejak dibuat</span></a>
-  <a class="tile" href="/containers/{{ view.name }}/backup"><small>Binlog terakhir</small><b>{{ state.last_binlog | ago }}</b><span class="muted">{{ state.counts.get("binlog", 0) }} file tersimpan</span></a>
-  <div class="tile{% if upload_error %} bad{% endif %}"><small>Antrean kirim</small><b>{{ pending.get("count", 0) }} file</b><span class="muted">{% if upload_error %}{{ upload_error.get("message") }}: {{ upload_error.get("file") }}{% else %}{{ pending.get("bytes", 0) | filesize }}{% endif %}</span></div>
-  <div class="tile{% if view.alerts | selectattr('kind', 'equalto', 'Agen') | list %} bad{% endif %}"><small>Heartbeat agen</small><b>{{ state.heartbeat_at | ago }}</b><span class="muted">batas 10 menit</span></div>
-  {% set disk = info.get("disk") or {} %}
-  <div class="tile"><small>Sisa disk /backup</small><b>{{ disk.get("free") | filesize }}</b><span class="muted">dari {{ disk.get("total") | filesize }}</span></div>
-</div>
-{% include "dashboard/_container_activity.html" %}
 <div class="section-title"><h2>Info container</h2></div>
 <div class="kv">
   <div><small>Database</small>{% for database in state.dumps if database != "_users" %}{{ database }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</div>
@@ -40,6 +29,17 @@
   {% set agent_newer = agent_update(info.get("agent_version")) %}
   <div><small>Agen</small>{% if info.get("agent_version") %}Di dalam image · <code>{{ info.get("agent_version") }}</code>{% if agent_newer %} <span class="pill pill-warn">Perlu update</span><br><span class="muted small">Ganti IMAGE_TAG di .env menjadi <code>{{ agent_newer }}</code>, lalu <code>docker compose up -d</code>. MariaDB ikut restart.</span>{% endif %}{% else %}—{% endif %}</div>
   {% for row in schedule_rows %}<div><small>{{ "Arsip binlog" if row.kind == "binlog" else "Jadwal " ~ row.kind }}</small><a href="/containers/{{ view.name }}/backup">{{ row.label }}</a></div>{% endfor %}
+</div>
+{% include "dashboard/_container_activity.html" %}
+<div class="section-title"><h2>Status backup</h2><a class="small" href="/containers/{{ view.name }}/backup">Backup &amp; log ›</a></div>
+<div class="tiles tiles-3">
+  <a class="tile{% if view.alerts | selectattr('key', 'equalto', 'full:' ~ view.name) | list %} bad{% endif %}" href="/containers/{{ view.name }}/backup"><small>Full terakhir</small><b>{{ state.last_full | ago }}</b><span class="muted">{{ state.counts.get("fullbackup", 0) }} file tersimpan</span></a>
+  <a class="tile" href="/containers/{{ view.name }}/backup"><small>Dump terlama</small><b>{{ oldest_dump | ago }}</b><span class="muted">dari {{ state.dumps | reject("equalto", "_users") | list | length }} database · umur sejak dibuat</span></a>
+  <a class="tile" href="/containers/{{ view.name }}/backup"><small>Binlog terakhir</small><b>{{ state.last_binlog | ago }}</b><span class="muted">{{ state.counts.get("binlog", 0) }} file tersimpan</span></a>
+  <div class="tile{% if upload_error %} bad{% endif %}"><small>Antrean kirim</small><b>{{ pending.get("count", 0) }} file</b><span class="muted">{% if upload_error %}{{ upload_error.get("message") }}: {{ upload_error.get("file") }}{% else %}{{ pending.get("bytes", 0) | filesize }}{% endif %}</span></div>
+  <div class="tile{% if view.alerts | selectattr('kind', 'equalto', 'Agen') | list %} bad{% endif %}"><small>Heartbeat agen</small><b>{{ state.heartbeat_at | ago }}</b><span class="muted">batas 10 menit</span></div>
+  {% set disk = info.get("disk") or {} %}
+  <div class="tile"><small>Sisa disk /backup</small><b>{{ disk.get("free") | filesize }}</b><span class="muted">dari {{ disk.get("total") | filesize }}</span></div>
 </div>
 {% include "dashboard/_container_tuning.html" %}
 </div>
