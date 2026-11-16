@@ -1,22 +1,23 @@
+# syntax=docker/dockerfile:1
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    PATH="/srv/.venv/bin:$PATH"
-
-COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /srv
 
-# Layer dependency terpisah dari kode: rebuild cepat saat hanya kode berubah
-COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev --no-install-project
-
-COPY alembic.ini ./
-COPY migrations ./migrations
-COPY app ./app
+# Tanpa COPY: image hanya berisi dependency. Kode (app, migrations, alembic.ini) di-bind mount
+# dari ./server oleh docker-compose.yml, jadi perubahan kode cukup `docker compose restart`.
+# Venv di /opt/venv, bukan /srv/.venv, supaya tidak tertutup bind mount.
+# Rebuild hanya bila pyproject.toml atau uv.lock berubah.
+RUN --mount=from=ghcr.io/astral-sh/uv:0.12,source=/uv,target=/usr/local/bin/uv \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    uv sync --locked --no-dev --no-install-project
 
 RUN useradd --system --no-create-home app
 USER app

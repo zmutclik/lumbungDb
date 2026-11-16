@@ -18,6 +18,10 @@ x-app: &app
   restart: unless-stopped
   logging: *default-logging
   volumes:
+    # Kode dimuat langsung dari repo, tidak di-COPY ke image (server/Dockerfile)
+    - ./server/app:/srv/app:ro
+    - ./server/migrations:/srv/migrations:ro
+    - ./server/alembic.ini:/srv/alembic.ini:ro
     # rslave: bila NFS ter-mount ulang di server, container ikut melihatnya
     - type: bind
       source: ${BACKUP_ROOT:?isi BACKUP_ROOT di .env}
