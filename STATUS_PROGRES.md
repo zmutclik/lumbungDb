@@ -62,7 +62,7 @@ Semua uji memakai folder lokal sebagai NAS, Telegram tiruan, dan data contoh. Be
   Update image juga sudah ada dan diuji di Docker sungguhan (11.4-a7 ke 12.3-a7, data utuh). Pemulihan ke container
   lama saat image baru tidak sehat hanya diuji dengan Docker tiruan.
   Kelola lewat runner (ambil alih container compose) diuji di Docker sungguhan: container dari compose script pasang
-  diambil alih, lalu Update image 11.4-a7 ke 12.3-a7 dan restart, data utuh. Butuh image runner r4.
+  diambil alih, lalu Update image 11.4-a7 ke 12.3-a7 dan restart, data utuh. Butuh image runner r4 (`zmutclik/lumbungdb-runner:r4` di Docker Hub, `RUNNER_VERSION_LATEST` r4).
 - Runner yang belum pernah mengirim heartbeat bisa terpilih sebagai runner container baru (alert runner yang menandai).
 - Penaikan yang runner-nya mati di tengah (batas waktu habis) meninggalkan nama container baru terdaftar di
   `agents.conf` tanpa agen; pembersihan hanya jalan saat runner melapor gagal.
