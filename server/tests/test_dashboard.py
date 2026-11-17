@@ -91,6 +91,22 @@ async def test_add_container_shows_token_once(client, csrf):
     assert "radiologi-db" in (await client.get("/containers")).text
 
 
+async def test_container_removed_from_file_is_listed_last_and_collapsed(client, csrf):
+    for name in ("radiologi-db", "zz-lama"):
+        await client.post("/containers", data={"name": name}, headers=post_headers(csrf))
+    token = registry.entries().active["zz-lama"]
+    await beat(client, {"X-Token": token})   # punya riwayat: baris database dipertahankan
+    lines = registry.path.read_text().splitlines(keepends=True)
+    registry.path.write_text("".join(line for line in lines if not line.startswith("zz-lama")))
+    page = (await client.get("/containers")).text
+    assert "(1 container" in page
+    section = page.index('id="removed-containers"')
+    assert page.index("radiologi-db") < section < page.index("zz-lama")
+    assert '<details class="box" id="removed-containers">' in page   # tertutup secara bawaan
+    dashboard = (await client.get("/dashboard")).text
+    assert "radiologi-db" in dashboard and "zz-lama" not in dashboard
+
+
 async def test_add_container_invalid_name_and_collision(client, csrf):
     bad = await client.post("/containers", data={"name": ".titik"}, headers=post_headers(csrf))
     assert bad.status_code == 422 and bad.headers["hx-retarget"] == "#wizard"

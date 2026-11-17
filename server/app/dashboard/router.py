@@ -81,10 +81,11 @@ def _control_error(err: control.ControlError) -> HTTPException:
 async def dashboard(request: Request, user: CurrentUserDep, db: DbSession, hari: int = 7):
     base = await _base(db, user, "dashboard")
     days = hari if hari in (7, 14, 30) else 7
-    day_list, rows = await view.timeline(db, base["views"], days, base["now"])
-    active_views = [v for v in base["views"] if v.status != "off"]
+    listed = [v for v in base["views"] if v.state.listed]   # yang dihapus dari agents.conf hanya ada di /containers
+    day_list, rows = await view.timeline(db, listed, days, base["now"])
+    active_views = [v for v in listed if v.status != "off"]
     context = {
-        **base, "days": days, "day_list": day_list, "timeline": rows,
+        **base, "views": listed, "days": days, "day_list": day_list, "timeline": rows,
         "problem_count": sum(1 for v in active_views if v.level in ("bad", "warn") or v.status == "wait-backup"),
         "active_count": len(active_views), "long_date": view.long_date(base["now"]),
         "day_labels": [view.day_label(day) if days == 7 else str(day.day) for day in day_list],
@@ -147,7 +148,8 @@ async def api_status(user: CurrentUserDep, db: DbSession):
 async def containers_page(request: Request, user: CurrentUserDep, db: DbSession):
     base = await _base(db, user, "containers")
     return render(request, "dashboard/containers.html", "dashboard/_containers.html",
-                  {**base, "groups": (groups := view.group_by_server(base["views"])),
+                  {**base, "groups": (groups := view.group_by_server([v for v in base["views"] if v.state.listed])),
+                   "removed": [v for v in base["views"] if not v.state.listed],
                    "server_count": sum(1 for g in groups if g.title != view.NOT_CONNECTED)})
 
 

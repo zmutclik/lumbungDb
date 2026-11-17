@@ -27,6 +27,7 @@ async def load_states(db: AsyncSession) -> list[ContainerState]:
     for row in (await db.execute(select(Container.name, Container.registered_at, Container.origin))).all():
         states[row.name] = ContainerState(
             name=row.name, active=row.name in entries.active, registered_at=row.registered_at, origin=row.origin,
+            listed=row.name in entries.all_names or not registry.path.exists(),
         )
     for row in (await db.execute(select(Heartbeat))).scalars():
         if state := states.get(row.container):

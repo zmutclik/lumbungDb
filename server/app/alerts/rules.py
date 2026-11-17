@@ -14,6 +14,7 @@ class ContainerState:
     name: str
     active: bool
     registered_at: datetime
+    listed: bool = True     # False = barisnya sudah dihapus dari agents.conf, tersisa karena riwayat
     origin: str = "file"
     heartbeat_at: datetime | None = None
     server: str | None = None
