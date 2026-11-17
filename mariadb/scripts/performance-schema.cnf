@@ -1,0 +1,5 @@
+[mysqld]
+# Penghitung per pola query untuk metrik, log slow query, dan analisis query di LumbungDB. Mati bawaan di MariaDB.
+# Memori tambahan diatur otomatis menurut max_connections dan jumlah tabel (biasanya puluhan sampai ratusan MB).
+# Tidak bisa diubah tanpa restart. Untuk mematikan, timpa dengan performance_schema=OFF di file .cnf lain.
+performance_schema = ON

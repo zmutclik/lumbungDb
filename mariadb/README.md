@@ -299,7 +299,10 @@ GRANT SHOW VIEW ON *.* TO 'lumbung'@'localhost';
 GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'lumbung'@'localhost';
 ```
 
-Tanpa user ini heartbeat tetap berjalan, hanya tanpa metrik. Daftar query terberat hanya ada bila `performance_schema=ON`.
+Tanpa user ini heartbeat tetap berjalan, hanya tanpa metrik. Daftar query terberat dan log slow query hanya ada bila
+`performance_schema=ON`. Image a7 ke atas menyalakannya lewat `/etc/mysql/conf.d/performance-schema.cnf` (bawaan MariaDB
+`OFF`); memori tambahan biasanya puluhan sampai ratusan MB. Untuk mematikan, pasang file `.cnf` lain berisi
+`performance_schema=OFF` lalu restart.
 
 ## Mode sidecar: container yang sudah ada
 
@@ -312,18 +315,20 @@ dan agen. Container MariaDB tidak di-restart dan config-nya tidak diubah. Compos
   `up -d --force-recreate` untuk sidecar.
 - Semua volume target dipasang read-only di path yang sama lewat `volumes_from`, termasuk binlog yang `log_bin`-nya di
   luar datadir. `/backup` milik sidecar sendiri.
-- `IMAGE_TAG` harus sama versinya dengan target sampai minor: target 10.11.x memakai `10.11-a6`, 11.4.x memakai `11.4-a6`.
+- `IMAGE_TAG` harus sama versinya dengan target sampai minor: target 10.11.x memakai `10.11-a7`, 11.4.x memakai `11.4-a7`.
   Image tersedia untuk 10.11, 11.4, dan 12.3. Versi lain: `MARIADB_VERSION=<versi> ./build-image.sh`.
 - Binlog harus aktif di target (`SELECT @@log_bin` bernilai 1) untuk arsip binlog dan database cadangan. Menyalakannya
   butuh restart target sekali dengan `log_bin` dan `server_id`. Tanpa itu hanya full dan dump yang jalan.
 - Tuning dari LumbungDB ditolak, dan metrik tidak menyertakan batas CPU dan memori container.
+- `performance_schema` target tidak dinyalakan oleh sidecar. Untuk log slow query, tambahkan `--performance-schema=ON`
+  di `command` compose target (atau `performance_schema=ON` di `.cnf`-nya), lalu restart target sekali.
 - Runner yang menguji atau memulihkan backup container ini harus memakai `MARIADB_IMAGE` dengan versi yang sama.
 
 Langkah:
 
 ```bash
 # .env di samping docker-compose.yml (salinan docker-compose.sidecar.yml), izin 600:
-#   IMAGE_TAG=10.11-a6  CONTAINER_NAME=<nama di LumbungDB>  TARGET_CONTAINER=<nama container MariaDB>
+#   IMAGE_TAG=10.11-a7  CONTAINER_NAME=<nama di LumbungDB>  TARGET_CONTAINER=<nama container MariaDB>
 #   BACKUP_USER=backup_<acak>  BACKUP_PASS=<acak>  LUMBUNG_METRICS_PASS=<acak>
 #   LUMBUNG_URL=...  LUMBUNG_TOKEN=...  LUMBUNG_AGE_RECIPIENTS=...  (DB_PORT bila target tidak di 3306)
 

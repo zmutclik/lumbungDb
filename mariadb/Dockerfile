@@ -11,6 +11,7 @@ RUN apt update && apt -y upgrade \
     && useradd --uid 9972 --no-create-home --shell /usr/sbin/nologin lumbung_tuning \
     &&  apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY --chmod=644 scripts/binlog.cnf /etc/mysql/conf.d/binlog.cnf
+COPY --chmod=644 scripts/performance-schema.cnf /etc/mysql/conf.d/performance-schema.cnf
 COPY --chmod=644 scripts/init-backup-user.sh /docker-entrypoint-initdb.d/
 COPY --chmod=755 scripts/backup/ /opt/backup/
 COPY --chmod=755 scripts/tuning.sh /opt/tuning.sh
