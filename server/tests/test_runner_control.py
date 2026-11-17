@@ -235,3 +235,38 @@ async def test_tag_outside_list_is_refused(client, csrf, runner_headers):
     resp = await client.post(f"/containers/{NAME}/image-update", data={"tag": "12.4-a7", "confirm": "yes"},
                              headers=post_headers(csrf))
     assert resp.status_code == 422 and "IMAGE_TAGS" in resp.text
+
+
+async def agent_reports(version):
+    from app.containers.models import Heartbeat
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container=NAME, server="vm-runner", machine_id="a" * 32, info={"agent_version": version}))
+
+
+async def test_agent_card_offers_update_button_for_managed_container(client, csrf, runner_headers, monkeypatch):
+    monkeypatch.setattr(settings, "IMAGE_TAG_DEFAULT", "12.3-a7")
+    await installed(client, csrf, runner_headers)
+    await agent_reports("12.3-a5")
+    page = (await client.get(f"/containers/{NAME}")).text
+    assert "Update ke 12.3-a7" in page and "image-update?tag=12.3-a7" in page and "Ganti IMAGE_TAG" not in page
+    dialog = (await client.get(f"/containers/{NAME}/image-update?tag=12.3-a7")).text
+    assert '<option value="12.3-a7" selected>' in dialog
+    await client.post(f"/containers/{NAME}/image-update", data={"tag": "12.3-a7", "confirm": "yes"},
+                      headers=post_headers(csrf))
+    assert "Update image menunggu" in (await client.get(f"/containers/{NAME}")).text
+
+
+async def test_update_button_tag_missing_from_list_is_explained(client, csrf, runner_headers, monkeypatch):
+    await installed(client, csrf, runner_headers)
+    await agent_reports("12.3-a5")
+    monkeypatch.setattr(settings, "IMAGE_TAGS", "11.4-a7")
+    dialog = (await client.get(f"/containers/{NAME}/image-update?tag=12.3-a9")).text
+    assert "belum ada di daftar IMAGE_TAGS" in dialog
+
+
+async def test_manual_container_keeps_manual_instruction(client, csrf, runner_headers, monkeypatch):
+    monkeypatch.setattr(settings, "IMAGE_TAG_DEFAULT", "12.3-a7")
+    await client.post("/containers", data={"name": NAME}, headers=post_headers(csrf))
+    await agent_reports("12.3-a5")
+    page = (await client.get(f"/containers/{NAME}")).text
+    assert "Ganti IMAGE_TAG" in page and "Update ke" not in page

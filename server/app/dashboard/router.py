@@ -286,11 +286,15 @@ async def retry_runner_install(name: str, user: CurrentUserDep, db: DbSession):
     return _done("Pemasangan diulang; menunggu runner.", modal=False)
 
 
-async def _update_dialog(request, db, name, *, tag=None, error=None, status_code=200, headers=None):
+async def _update_dialog(request, db, name, *, tag=None, error=None, status_code=200, headers=None, wanted=""):
     managed = await control_service.get(db, name)
     if managed is None:
         raise HTTPException(status_code=404, detail="Container ini tidak dipasang lewat runner.")
     current = await control_service.current_tag(db, name)
+    if wanted and wanted in control_service.update_choices(current):
+        tag = wanted
+    elif wanted and error is None:
+        error = f"Tag {wanted} belum ada di daftar IMAGE_TAGS LumbungDB; tambahkan dulu di .env lalu restart LumbungDB."
     return templates.TemplateResponse(
         request=request, name="dashboard/_image_update_dialog.html", status_code=status_code, headers=headers or {},
         context={"name": name, "runner": managed.runner, "current": current, "error": error,
@@ -301,8 +305,9 @@ async def _update_dialog(request, db, name, *, tag=None, error=None, status_code
 
 
 @router.get("/containers/{name}/image-update")
-async def image_update_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
-    return await _update_dialog(request, db, name)
+async def image_update_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession, tag: str = ""):
+    """?tag= dari tombol Update di kartu Agen: terpilih bila ada di daftar, selain itu diberi tahu."""
+    return await _update_dialog(request, db, name, wanted=tag[:40])
 
 
 @router.post("/containers/{name}/image-update")
