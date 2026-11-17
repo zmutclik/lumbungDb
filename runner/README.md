@@ -73,6 +73,15 @@ yang baru tidak sehat, ia dibuang (tanpa volume) dan yang lama dijalankan lagi. 
 turun. Versi MariaDB yang naik menjalankan `mariadb-upgrade`; bila gagal di tengah, container lama mungkin tidak bisa
 membaca datanya lagi, jadi pastikan ada full backup yang lolos uji.
 
+**Kelola lewat runner** (menu ⋮ container yang belum dikelola runner) mengambil alih container yang dipasang di luar
+runner, mis. lewat perintah curl dan `docker compose`. Syaratnya runner r4 berjalan di mesin yang sama (machine-id agen
+dan runner sama) dan image-nya `zmutclik/mariadb:lumbungdb-*` (mode sidecar belum bisa). Runner menyusun `.env` di
+`<SCRATCH_DIR>/containers/<nama>/.env` dari environment container dikurangi ENV bawaan image-nya, lalu membuat ulang
+container dengan cara yang sama seperti Update image: nama, image yang persis sama (ID image, bila tag-nya sudah
+menunjuk image lain), volume, port, batas CPU/memori, dan healthcheck, ditambah label `lumbung.managed=1`. Label
+compose tidak disalin, jadi `docker compose` di folder lama tidak lagi memegangnya: `up` ditolak karena nama bentrok.
+Pensiunkan folder itu. Container hasil Naikkan ke production sebelum fitur ini cukup dicatat tanpa dibuat ulang.
+
 Heartbeat runner juga membawa CPU (rata-rata sejak heartbeat sebelumnya), load, dan memori seluruh mesin dari `/proc`
 (di VM atau komputer tanpa lxcfs, angka ini milik host, bukan container runner), serta status container yang dikelolanya.
 Semua tampil di halaman Runner.

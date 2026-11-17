@@ -49,7 +49,8 @@ def file_row(backup: Backup) -> dict:
     }
 
 
-CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update")
+CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update",
+                 "container_adopt")
 
 
 async def claim_next(db: AsyncSession, runner: str, lane: str = "main") -> dict | None:

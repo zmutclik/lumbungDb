@@ -329,6 +329,36 @@ async def image_update(name: str, request: Request, user: CurrentUserDep, db: Db
     return _done(f"Update {name} ke {tag} diminta, menunggu runner {job.runner}.")
 
 
+@router.get("/containers/{name}/adopt")
+async def adopt_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    if await control_service.get(db, name) is not None:
+        raise HTTPException(status_code=409, detail="Container ini sudah dikelola runner.")
+    return templates.TemplateResponse(request=request, name="dashboard/_adopt_dialog.html", context={
+        "name": name, "error": None, "choices": await control_service.adopt_runners(db, name),
+        "all_runners": sorted(runner_registry.entries().active)})
+
+
+@router.post("/containers/{name}/adopt")
+async def adopt(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    form = await request.form()
+    runner = str(form.get("runner", "")).strip()[:100]
+    error = None if form.get("confirm") == "yes" else "Centang konfirmasi bahwa MariaDB akan restart sekali."
+    if error is None:
+        try:
+            await control_service.create_adopt(db, name, runner, user.username)
+        except runner_service.RunnerError as err:
+            if err.status_code != 422:
+                raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+            error = err.detail
+    if error:
+        return templates.TemplateResponse(
+            request=request, name="dashboard/_adopt_dialog.html", status_code=422,
+            headers={"HX-Retarget": "#adopt-form", "HX-Reswap": "outerHTML"},
+            context={"name": name, "error": error, "choices": await control_service.adopt_runners(db, name),
+                     "all_runners": sorted(runner_registry.entries().active)})
+    return _done(f"{name} akan diambil alih runner {runner}.")
+
+
 @router.post("/containers/{name}/power/{action}")
 async def container_power(name: str, action: str, user: CurrentUserDep, db: DbSession):
     """Start, stop, atau restart lewat runner yang memasang atau menaikkan container ini."""
@@ -347,7 +377,7 @@ async def _detail_context(db, user, name: str, tab: str) -> dict:
     return {
         **base, "view": found, "tab": tab, "managed": managed,
         "managed_state": await control_service.live_state(db, managed),
-        "managed_job": await control_service.latest_job(db, name) if managed else None,
+        "managed_job": await control_service.latest_job(db, name),
         "disabled_at": await view.disabled_at(db, name) if found.status == "off" else None,
         "schedule_rows": view.schedule_rows(found.state, base["now"]),
         "oldest_dump": view.oldest_dump(found.state), "disk_used": view.disk_used_percent(found.state),

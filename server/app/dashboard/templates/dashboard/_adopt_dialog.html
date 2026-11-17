@@ -1,0 +1,16 @@
+<form id="adopt-form" hx-post="/containers/{{ name }}/adopt">
+  <h3>Kelola lewat runner: {{ name }}</h3>
+  {% if error %}<div class="banner banner-bad" role="alert">{{ error }}</div>{% endif %}
+  <ul>
+    <li>Runner di mesin yang sama membuat ulang {{ name }} dengan nama, image, data (volume yang sama), port, batas CPU/memori, dan environment yang sama, ditambah label runner. MariaDB restart sekali; bila gagal naik, container lama dijalankan lagi.</li>
+    <li>Sesudahnya Start, Stop, Restart, dan Update image bisa dari dashboard. Environment container (termasuk password) disalin ke <code>&lt;SCRATCH_DIR&gt;/containers/{{ name }}/.env</code> di mesin itu.</li>
+    <li><b>Folder compose lama dipensiunkan.</b> Jangan jalankan <code>docker compose</code> di folder itu lagi: compose tidak lagi memegang container ini, <code>up</code> akan bentrok nama, dan <code>down -v</code> menyasar volume data yang sama.</li>
+    <li>Hanya image <code>zmutclik/mariadb:lumbungdb-*</code>; mode sidecar belum bisa.</li>
+  </ul>
+  {% if choices %}<div class="field"><label for="ad-runner">Runner</label>
+    <select id="ad-runner" name="runner" required>{% for r in choices %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select>
+    <div class="hint">Hanya runner yang berjalan di mesin yang sama (machine-id sama dengan agen container ini).</div></div>
+  <div class="field"><label><input type="checkbox" name="confirm" value="yes" required> Saya mengerti {{ name }} restart sekali dan folder compose lama tidak dipakai lagi.</label></div>
+  {% else %}<div class="banner banner-info">Belum ada runner aktif di mesin yang sama dengan {{ name }}{% if all_runners %} (runner yang ada: {{ all_runners | join(", ") }}, semuanya di mesin lain atau belum mengirim heartbeat){% endif %}. Pasang runner r3 di server itu lewat <a href="/runners">Tambah runner</a>, lalu coba lagi.</div>{% endif %}
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit"{% if not choices %} disabled{% endif %}>Kelola lewat runner</button></div>
+</form>

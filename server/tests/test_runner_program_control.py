@@ -243,3 +243,110 @@ def test_update_needs_env_file_and_valid_image(r, tmp_path):  # noqa: F811
     w.job["update"]["image"] = "img; rm -rf /"
     assert w.execute() == "Tidak terlaksana"
     assert not any(c[:2] in (["docker", "stop"], ["docker", "pull"]) for c in calls)
+
+
+COMPOSE = {
+    **INSPECT,
+    "Image": "sha256:aaa",
+    "Config": {**INSPECT["Config"], "Image": "zmutclik/mariadb:lumbungdb-12.3-a5",
+               "Labels": {"com.docker.compose.project": "radiologi-db", "com.docker.compose.service": "mariadb"},
+               "Env": ["MARIADB_ROOT_PASSWORD=rahasia", "LUMBUNG_TOKEN=tok-1", "BACKUP_PASS=a=b",
+                       "PATH=/usr/local/sbin:/usr/bin", "MARIADB_VERSION=1:12.3.3"]},
+}
+
+
+def adopt_worker(r, tmp_path, calls, inspected=COMPOSE, labels=None, image_env=("PATH=/usr/local/sbin:/usr/bin",  # noqa: F811
+                 "MARIADB_VERSION=1:12.3.3"), tag_id="sha256:aaa", state="running healthy"):
+    def run(args, timeout=0, stdin_path=None):
+        calls.append(args)
+        text = " ".join(args)
+        if "Config.Labels" in text:
+            return 0, json.dumps(labels if labels is not None else inspected["Config"]["Labels"]) + "\n", ""
+        if args == ["docker", "inspect", "radiologi-db"]:
+            return 0, json.dumps([inspected]), ""
+        if args[:3] == ["docker", "image", "inspect"] and "Config.Env" in text:
+            return 0, json.dumps(list(image_env)) + "\n", ""
+        if args[:3] == ["docker", "image", "inspect"] and ".Id" in text:
+            return 0, tag_id + "\n", ""
+        if args[:2] == ["docker", "inspect"] and "State.Status" in text:
+            return 0, state + "\n", ""
+        if args[:2] == ["docker", "logs"]:
+            return 0, "gagal naik", ""
+        return 0, "", ""
+
+    cfg = {**config(tmp_path), "container_dir": str(tmp_path / "containers"), "promote_dir": str(tmp_path / "p"),
+           "ready_seconds": 5}
+    return r.ContainerWorker(cfg, FakeClient(), {"id": 6, "kind": "container_adopt", "container": "radiologi-db",
+                                                 "files": []}, run)
+
+
+def test_adopt_recreates_compose_container_with_runner_label(r, tmp_path):  # noqa: F811
+    calls = []
+    w = adopt_worker(r, tmp_path, calls)
+    assert w.execute() == "Lolos", w.note
+    env_path = tmp_path / "containers" / "radiologi-db" / ".env"
+    assert env_path.read_text().splitlines() == ["BACKUP_PASS=a=b", "LUMBUNG_TOKEN=tok-1", "MARIADB_ROOT_PASSWORD=rahasia"]
+    assert oct(env_path.stat().st_mode & 0o777) == "0o600"
+    run, = docker_runs(calls)
+    assert "--label lumbung.managed=1" in run and "--label lumbung.container=radiologi-db" in run
+    assert "com.docker.compose" not in run and "-p 3310:3306" in run and f"--env-file {env_path}" in run
+    assert run.endswith("zmutclik/mariadb:lumbungdb-12.3-a5 mariadbd")
+    assert w.managed == {"port": 3310, "image_tag": "12.3-a5"}
+    joined = [" ".join(c) for c in calls]
+    assert "docker rm radiologi-db-lama-6" in joined and not any("pull" in j for j in joined)
+
+
+def test_adopt_keeps_exact_image_when_tag_moved(r, tmp_path):  # noqa: F811
+    calls = []
+    w = adopt_worker(r, tmp_path, calls, tag_id="sha256:lain")
+    assert w.execute() == "Lolos"
+    assert docker_runs(calls)[0].endswith("sha256:aaa mariadbd")
+
+
+def test_adopt_rolls_back_and_removes_env_when_unhealthy(r, tmp_path):  # noqa: F811
+    calls = []
+    w = adopt_worker(r, tmp_path, calls, state="running unhealthy")
+    assert w.execute() == "Gagal" and w.managed is None
+    joined = [" ".join(c) for c in calls]
+    assert "docker rename radiologi-db-lama-6 radiologi-db" in joined and "docker start radiologi-db" in joined
+    assert not (tmp_path / "containers" / "radiologi-db" / ".env").exists()
+
+
+def test_adopt_refuses_sidecar_or_foreign_container(r, tmp_path):  # noqa: F811
+    calls = []
+    sidecar = {**COMPOSE, "Config": {**COMPOSE["Config"], "Image": "mariadb:11.4"}}
+    w = adopt_worker(r, tmp_path, calls, inspected=sidecar)
+    assert w.execute() == "Tidak terlaksana" and "sidecar" in w.note
+    no_token = {**COMPOSE, "Config": {**COMPOSE["Config"], "Env": ["MARIADB_ROOT_PASSWORD=x"]}}
+    w = adopt_worker(r, tmp_path, calls, inspected=no_token)
+    assert w.execute() == "Tidak terlaksana" and "LUMBUNG_TOKEN" in w.note
+    assert not docker_runs(calls) and not any(c[:2] == ["docker", "stop"] for c in calls)
+
+
+def test_adopt_of_promoted_container_only_records(r, tmp_path):  # noqa: F811
+    calls = []
+    (tmp_path / "p" / "radiologi-db").mkdir(parents=True)
+    (tmp_path / "p" / "radiologi-db" / ".env").write_text("X=1\n")
+    w = adopt_worker(r, tmp_path, calls, labels={"lumbung.promoted": "1"})
+    assert w.execute() == "Lolos" and "hanya dicatat" in w.note and w.managed["port"] == 3310
+    assert not docker_runs(calls) and not any(c[:2] == ["docker", "stop"] for c in calls)
+
+
+def test_control_result_carries_managed_info(r, tmp_path):  # noqa: F811
+    client = FakeClient()
+    replies = {"job": {"id": 6, "kind": "container_adopt", "container": "radiologi-db", "files": []}}
+    original = client.json
+
+    def json_call(method, path, body=None):
+        if path == "/api/runner/jobs/claim?lane=control":
+            job, replies["job"] = replies["job"], None
+            return 200, {"job": job}
+        return original(method, path, body)
+
+    client.json = json_call
+    calls = []
+    worker = adopt_worker(r, tmp_path, calls)
+    runner = r.Runner(worker.config, client, worker.run)
+    assert runner.control_once() is True
+    result = next(body for path, body in client.calls if path == "/api/runner/jobs/6/result")
+    assert result["status"] == "Lolos" and result["managed"] == {"port": 3310, "image_tag": "12.3-a5"}

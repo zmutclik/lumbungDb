@@ -21,8 +21,9 @@ from app.runners.schemas import JobResultIn
 KIND_INSTALL = "container_install"
 ACTIONS = {"start": "container_start", "stop": "container_stop", "restart": "container_restart"}
 KIND_UPDATE = "container_update"
+KIND_ADOPT = "container_adopt"
 ACTION_LABEL = {"container_install": "Pasang", "container_start": "Start", "container_stop": "Stop",
-                "container_restart": "Restart", "container_update": "Update image"}
+                "container_restart": "Restart", "container_update": "Update image", "container_adopt": "Kelola lewat runner"}
 TAG = re.compile(r"^(\d{1,3})\.(\d{1,3})-a(\d{1,4})$")      # versi MariaDB lalu versi agen, mis. 12.3-a7
 DEFAULT_CPUS = "2"
 DEFAULT_MEMORY = "2g"
@@ -183,6 +184,34 @@ async def create_update(db: AsyncSession, container: str, tag: str, actor: str) 
     return job
 
 
+async def adopt_runners(db: AsyncSession, container: str) -> list[str]:
+    """Runner aktif di mesin yang sama dengan container (machine-id dari heartbeat agen dan runner)."""
+    machine = await db.scalar(select(Heartbeat.machine_id).where(Heartbeat.container == container))
+    if not machine:
+        return []
+    active = runners.entries().active
+    return sorted(r for r in await db.scalars(select(RunnerHeartbeat.runner).where(RunnerHeartbeat.machine_id == machine))
+                  if r in active)
+
+
+async def create_adopt(db: AsyncSession, container: str, runner: str, actor: str) -> Job:
+    """Kelola lewat runner: runner di mesin yang sama membuat ulang container lama dengan label runner. Baris
+    managed_containers baru dibuat saat runner melapor berhasil."""
+    if container not in agents.entries().active:
+        raise service.RunnerError(409, "Container nonaktif.")
+    async with db.begin():
+        if await db.get(ManagedContainer, container) is not None:
+            raise service.RunnerError(409, "Container ini sudah dikelola runner.")
+        if runner not in await adopt_runners(db, container):
+            raise service.RunnerError(422, "Pilih runner aktif yang berjalan di mesin yang sama dengan container ini.")
+        if await has_active_job(db, container):
+            raise service.RunnerError(409, "Masih ada aksi yang berjalan atau menunggu untuk container ini.")
+        job = Job(runner=runner, container=container, kind=KIND_ADOPT, status=service.STATUS_WAITING, requested_by=actor)
+        db.add(job)
+        db.add(ControlLog(container=container, actor=actor, action="Kelola lewat runner", detail=f"runner {runner}"))
+    return job
+
+
 async def claim_context(db: AsyncSession, job: Job) -> dict:
     """Tambahan jawaban klaim. Token agen dibaca dari agents.conf, bukan dari database."""
     if job.kind == KIND_UPDATE:
@@ -203,6 +232,14 @@ async def record_result(db: AsyncSession, job: Job, data: JobResultIn) -> None:
     """Dipanggil dari finish_job di dalam transaksinya."""
     if job.kind not in service.CONTROL_KINDS:
         return
+    if job.kind == KIND_ADOPT and data.status == "Lolos" and data.managed is not None:
+        row = await db.get(ManagedContainer, job.container, with_for_update=True)
+        tag = data.managed.image_tag if data.managed.image_tag and TAG.fullmatch(data.managed.image_tag) else None
+        if row is None:
+            db.add(ManagedContainer(container=job.container, runner=job.runner, port=data.managed.port, origin="adopt",
+                                    created_by=job.requested_by or f"runner {job.runner}", image_tag=tag))
+        else:
+            row.runner, row.port, row.image_tag = job.runner, data.managed.port, tag or row.image_tag
     if job.kind == KIND_UPDATE and data.status == "Lolos":
         target = await db.get(ContainerUpdate, job.id)
         row = await db.get(ManagedContainer, job.container, with_for_update=True)

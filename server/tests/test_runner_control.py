@@ -269,4 +269,69 @@ async def test_manual_container_keeps_manual_instruction(client, csrf, runner_he
     await client.post("/containers", data={"name": NAME}, headers=post_headers(csrf))
     await agent_reports("12.3-a5")
     page = (await client.get(f"/containers/{NAME}")).text
-    assert "Ganti IMAGE_TAG" in page and "Update ke" not in page
+    assert "anti IMAGE_TAG" in page and "Update ke" not in page and f"/containers/{NAME}/adopt" in page
+
+
+async def manual_container(client, csrf, machine="a" * 32):
+    from app.containers.models import Heartbeat
+    await client.post("/containers", data={"name": NAME}, headers=post_headers(csrf))
+    async with async_session_factory() as db, db.begin():
+        db.add(Heartbeat(container=NAME, server="db-1", machine_id=machine, info={"agent_version": "12.3-a5"}))
+
+
+async def runner_on(client, headers, machine):
+    await client.post("/api/runner/heartbeat", headers=headers, json={"machine_id": machine, "version": "r3"})
+
+
+async def test_adopt_offers_only_runner_on_same_machine(client, csrf, runner_headers):
+    await manual_container(client, csrf)
+    other = {"X-Runner-Token": runners.add("runner-2")}
+    await runner_on(client, runner_headers, "a" * 32)
+    await runner_on(client, other, "b" * 32)
+    dialog = (await client.get(f"/containers/{NAME}/adopt")).text
+    assert '<option value="runner-1">' in dialog and '<option value="runner-2">' not in dialog
+    resp = await client.post(f"/containers/{NAME}/adopt", data={"runner": "runner-2", "confirm": "yes"},
+                             headers=post_headers(csrf))
+    assert resp.status_code == 422 and "mesin yang sama" in resp.text
+    resp = await client.post(f"/containers/{NAME}/adopt", data={"runner": "runner-1"}, headers=post_headers(csrf))
+    assert resp.status_code == 422 and "Centang" in resp.text
+
+
+async def test_adopt_without_runner_on_machine_explains(client, csrf, runner_headers):
+    await manual_container(client, csrf)
+    await runner_on(client, runner_headers, "b" * 32)
+    dialog = (await client.get(f"/containers/{NAME}/adopt")).text
+    assert "Belum ada runner aktif di mesin yang sama" in dialog and "disabled" in dialog
+
+
+async def test_adopt_success_makes_container_managed(client, csrf, runner_headers):
+    await manual_container(client, csrf)
+    await runner_on(client, runner_headers, "a" * 32)
+    resp = await client.post(f"/containers/{NAME}/adopt", data={"runner": "runner-1", "confirm": "yes"},
+                             headers=post_headers(csrf))
+    assert resp.status_code == 200, resp.text
+    assert "Kelola lewat runner runner-1: menunggu" in (await client.get(f"/containers/{NAME}")).text
+    assert (await client.post(f"/containers/{NAME}/power/stop", headers=post_headers(csrf))).status_code == 404
+    job = await claim(client, runner_headers)
+    assert (job["kind"], job["container"]) == ("container_adopt", NAME)
+    resp = await client.post(f"/api/runner/jobs/{job['id']}/result", headers=runner_headers, json={
+        "status": "Lolos", "note": "dikelola", "managed": {"port": 3307, "image_tag": "12.3-a5"}})
+    assert resp.status_code == 200, resp.text
+    async with async_session_factory() as db:
+        row = await db.get(ManagedContainer, NAME)
+    assert (row.runner, row.port, row.origin, row.image_tag) == ("runner-1", 3307, "adopt", "12.3-a5")
+    page = (await client.get(f"/containers/{NAME}")).text
+    assert "Update ke" in page and f"/containers/{NAME}/power/stop" in page
+    assert (await client.get(f"/containers/{NAME}/adopt")).status_code == 409
+
+
+async def test_failed_adopt_leaves_container_unmanaged(client, csrf, runner_headers):
+    await manual_container(client, csrf)
+    await runner_on(client, runner_headers, "a" * 32)
+    await client.post(f"/containers/{NAME}/adopt", data={"runner": "runner-1", "confirm": "yes"}, headers=post_headers(csrf))
+    job = await claim(client, runner_headers)
+    await client.post(f"/api/runner/jobs/{job['id']}/result", headers=runner_headers,
+                      json={"status": "Tidak terlaksana", "note": "image: hanya image zmutclik"})
+    async with async_session_factory() as db:
+        assert await db.get(ManagedContainer, NAME) is None
+    assert "Kelola lewat runner tidak terlaksana" in (await client.get(f"/containers/{NAME}")).text

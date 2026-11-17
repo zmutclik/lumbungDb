@@ -44,8 +44,15 @@ class StandbyResultIn(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
 
 
+class ManagedResultIn(BaseModel):
+    """Hasil Kelola lewat runner: port data dan tag image container yang kini dikelola runner."""
+    port: int = Field(ge=1, le=65535)
+    image_tag: str | None = Field(default=None, max_length=40)
+
+
 class JobResultIn(BaseModel):
     status: Literal["Lolos", "Gagal", "Tidak terlaksana"]
     note: str | None = Field(default=None, max_length=500)
     results: list[TestResultIn] = Field(default=[], max_length=500)
     standby: StandbyResultIn | None = None
+    managed: ManagedResultIn | None = None

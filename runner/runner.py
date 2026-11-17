@@ -811,7 +811,8 @@ class StandbyRunner(Restorer):
 
 
 MANAGED_LABEL = "lumbung.managed=1"
-CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update")
+CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update",
+                 "container_adopt")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:/@+=,-]*$")
 
@@ -833,6 +834,7 @@ class ContainerWorker:
         self.config, self.client, self.job, self.run = config, client, job, runner
         self.progress = progress or (lambda step: None)
         self.note = None
+        self.managed = None          # {port, image_tag} untuk dicatat LumbungDB sesudah ambil alih
 
     def _labels(self, name):
         code, out, _ = self.run(["docker", "inspect", "-f", "{{json .Config.Labels}}", name], 60)
@@ -872,16 +874,19 @@ class ContainerWorker:
             raise NotRun(".env", f"{path} tidak ada; container tidak bisa dibuat ulang dengan password yang sama")
         return path
 
-    def _recreate_args(self, name, inspected, env_path, image):
+    def _recreate_args(self, name, inspected, env_path, image, extra_labels=()):
         """Argumen docker run dari container lama: nama, hostname, restart, label lumbung, port, batas sumber daya,
         volume/bind, healthcheck, dan argumen MariaDB. ENV tidak disalin dari inspect (berisi ENV image lama, mis.
         MARIADB_VERSION); semua nilai sendiri ada di .env."""
         config, host = inspected.get("Config") or {}, inspected.get("HostConfig") or {}
         args = ["docker", "run", "-d", "--name", name, "--hostname", config.get("Hostname") or name,
                 "--restart", (host.get("RestartPolicy") or {}).get("Name") or "always", "--env-file", env_path]
-        for key, value in sorted((config.get("Labels") or {}).items()):
-            if key.startswith("lumbung."):
-                args += ["--label", f"{key}={value}"]
+        labels = {k: v for k, v in (config.get("Labels") or {}).items() if k.startswith("lumbung.")}
+        for extra in extra_labels:
+            key, _, value = extra.partition("=")
+            labels[key] = value
+        for key, value in sorted(labels.items()):
+            args += ["--label", f"{key}={value}"]
         for container_port, bindings in sorted((host.get("PortBindings") or {}).items()):
             for binding in bindings or []:
                 address = f"{binding['HostIp']}:" if binding.get("HostIp") else ""
@@ -941,6 +946,17 @@ class ContainerWorker:
         if labels.get("lumbung.managed") != "1" and labels.get("lumbung.promoted") != "1":
             raise NotRun("container", f"{name} tidak dipasang lewat runner; tidak disentuh")
         env_path = self._env_file(name, labels)
+        inspected = self._inspect(name)
+        old_image = (inspected.get("Config") or {}).get("Image", "")
+        args = self._recreate_args(name, inspected, env_path, image)
+        self.progress(f"unduh image {image}")
+        code, _, err = self.run(["docker", "pull", image], 3600)
+        if code != 0:
+            raise NotRun("unduh image", err.strip()[-300:])
+        self._replace(name, inspected, args, "jalankan dengan image baru", "tunggu MariaDB sehat (termasuk mariadb-upgrade)")
+        self.note = f"{name}: {old_image} → {image}"
+
+    def _inspect(self, name):
         code, out, err = self.run(["docker", "inspect", name], 60)
         try:
             inspected = json.loads(out)[0] if code == 0 else None
@@ -948,13 +964,12 @@ class ContainerWorker:
             inspected = None
         if not inspected:
             raise NotRun("inspect", err.strip()[-300:] or "inspect tidak terbaca")
-        old_image = (inspected.get("Config") or {}).get("Image", "")
+        return inspected
+
+    def _replace(self, name, inspected, args, run_step, wait_step):
+        """Ganti container dengan yang dibuat dari `args`, data tetap di volume yang sama. Yang lama dihentikan dan
+        diganti namanya dulu; bila yang baru gagal naik atau tidak sehat, yang lama dijalankan lagi."""
         old_restart = ((inspected.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name") or "always"
-        args = self._recreate_args(name, inspected, env_path, image)
-        self.progress(f"unduh image {image}")
-        code, _, err = self.run(["docker", "pull", image], 3600)
-        if code != 0:
-            raise NotRun("unduh image", err.strip()[-300:])
         old = f"{name}-lama-{self.job['id']}"
         self.progress("hentikan container lama")
         # Restart dimatikan dulu: container lama tidak boleh hidup lagi bersama yang baru di volume yang sama.
@@ -969,11 +984,11 @@ class ContainerWorker:
             self.run(["docker", "start", name], 300)
             raise NotRun("ganti nama container lama", err.strip()[-300:])
         try:
-            self.progress("jalankan dengan image baru")
+            self.progress(run_step)
             code, _, err = self.run(args, 600)
             if code != 0:
                 raise NotRun("jalankan container baru", err.strip()[-300:])
-            self.progress("tunggu MariaDB sehat (termasuk mariadb-upgrade)")
+            self.progress(wait_step)
             self._wait_up(name)
         except NotRun:
             self.progress("batalkan: kembalikan container lama")
@@ -983,7 +998,72 @@ class ContainerWorker:
             self.run(["docker", "start", name], 300)
             raise
         self.run(["docker", "rm", old], 120)                       # tanpa -v: volume dipakai container baru
-        self.note = f"{name}: {old_image} → {image}"
+
+    # ---------- kelola lewat runner (ambil alih) ----------
+    @staticmethod
+    def _data_port(inspected):
+        for binding in ((inspected.get("HostConfig") or {}).get("PortBindings") or {}).get("3306/tcp") or []:
+            if str(binding.get("HostPort", "")).isdigit():
+                return int(binding["HostPort"])
+        return None
+
+    def _tag_of(self, image):
+        return image.split(":lumbungdb-", 1)[1] if ":lumbungdb-" in image else None
+
+    def adopt(self):
+        """Container MariaDB yang dipasang di luar runner (mis. docker compose dari script pasang) dibuat ulang dengan
+        label lumbung.managed=1, data, nama, port, dan image yang sama. .env disusun dari environment container
+        dikurangi ENV bawaan image, jadi folder compose lama tidak perlu dibaca. Label compose tidak disalin: compose
+        tidak lagi menganggap container ini miliknya."""
+        name = self.job["container"]
+        labels = self._labels(name)
+        if labels is None:
+            raise NotRun("container", f"container bernama {name} tidak ada di mesin runner ini")
+        inspected = self._inspect(name)
+        config = inspected.get("Config") or {}
+        image = config.get("Image", "")
+        port = self._data_port(inspected)
+        if port is None:
+            raise NotRun("port", f"{name} tidak membuka port 3306 ke host")
+        if labels.get("lumbung.managed") == "1" or labels.get("lumbung.promoted") == "1":
+            self._env_file(name, labels)                    # harus ada untuk Update image nanti
+            self.managed = {"port": port, "image_tag": self._tag_of(image)}
+            self.note = f"{name} sudah dibuat runner; hanya dicatat"
+            return
+        if not image.startswith("zmutclik/mariadb:lumbungdb-"):
+            raise NotRun("image", f"{name} memakai {image or 'image tidak dikenal'}; hanya image zmutclik/mariadb:lumbungdb-* "
+                                  "yang bisa dikelola (mode sidecar tidak)")
+        code, out, err = self.run(["docker", "image", "inspect", "-f", "{{json .Config.Env}}", inspected.get("Image", "")], 60)
+        if code != 0:
+            raise NotRun("image", f"image container tidak terbaca: {err.strip()[-200:]}")
+        try:
+            image_env = set(json.loads(out.strip() or "[]") or [])
+        except ValueError:
+            image_env = set()
+        own = [e for e in config.get("Env") or [] if e not in image_env and "=" in e]
+        keys = {e.split("=", 1)[0] for e in own}
+        if "LUMBUNG_TOKEN" not in keys:
+            raise NotRun("environment", f"{name} tidak punya LUMBUNG_TOKEN; bukan container agen LumbungDB")
+        if any("\n" in e or "\r" in e for e in own):
+            raise NotRun("environment", "ada nilai environment berisi baris baru; tidak bisa ditulis ke .env")
+        # Tag yang sekarang menunjuk image lain (mis. di-pull ulang) tidak dipakai: versi tidak boleh berubah diam-diam.
+        code, out, _ = self.run(["docker", "image", "inspect", "-f", "{{.Id}}", image], 60)
+        run_image = image if code == 0 and out.strip() == inspected.get("Image") else inspected.get("Image")
+        target = os.path.join(self.config["container_dir"], name)
+        os.makedirs(target, mode=0o700, exist_ok=True)
+        env_path = os.path.join(target, ".env")
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write("\n".join(sorted(own)) + "\n")
+        args = self._recreate_args(name, inspected, env_path, run_image, extra_labels=(MANAGED_LABEL,
+                                                                                     f"lumbung.container={name}"))
+        try:
+            self._replace(name, inspected, args, "jalankan ulang dengan label runner", "tunggu MariaDB sehat")
+        except NotRun:
+            os.unlink(env_path)
+            raise
+        self.managed = {"port": port, "image_tag": self._tag_of(image)}
+        self.note = f"{name} kini dikelola runner (port {port}); .env di {env_path}. Jangan jalankan docker compose di folder lama."
 
     # ---------- pasang ----------
     def install(self):
@@ -1059,6 +1139,8 @@ class ContainerWorker:
                 self.install()
             elif kind == "container_update":
                 self.update_image()
+            elif kind == "container_adopt":
+                self.adopt()
             elif kind in CONTROL_KINDS:
                 self.power(kind.removeprefix("container_"))
             else:
@@ -1226,14 +1308,17 @@ class Runner:
 
         worker = ContainerWorker(self.config, self.client, job, self.run, progress)
         try:
-            if job["kind"] in ("container_install", "container_update"):
+            if job["kind"] in ("container_install", "container_update", "container_adopt"):
                 with SHUTDOWN.guard():
                     status = worker.execute()
             else:
                 status = worker.execute()
         except Exception as exc:     # kesalahan runner sendiri tidak boleh menghentikan loop
             status, worker.note = "Tidak terlaksana", f"{type(exc).__name__}: {exc}"[:500]
-        self.pending_control = (job["id"], {"status": status, "note": worker.note, "results": []})
+        body = {"status": status, "note": worker.note, "results": []}
+        if status == "Lolos" and worker.managed:
+            body["managed"] = worker.managed
+        self.pending_control = (job["id"], body)
         code, _ = self.client.json("POST", f"/api/runner/jobs/{job['id']}/result", self.pending_control[1])
         if code in (200, 403, 404, 409):
             self.pending_control = None
