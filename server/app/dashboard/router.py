@@ -171,7 +171,8 @@ async def new_container_page(request: Request, user: CurrentUserDep, db: DbSessi
     base = await _base(db, user, "containers")
     return templates.TemplateResponse(request=request, name="dashboard/wizard.html", context={
         **base, "name": "", "port": install_service.DEFAULT_PORT, "error": None, "step": 1,
-        "runner": "", "runner_choices": await _runner_choices(db)})
+        "runner": "", "runner_choices": await _runner_choices(db), "image_tags": control_service.image_tags(),
+        "image_tag": settings.IMAGE_TAG_DEFAULT})
 
 
 @router.post("/containers/name-check")
@@ -193,6 +194,7 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
     name = str(form.get("name", "")).strip()[:100]
     port_text = str(form.get("port", "")).strip()[:10] or str(install_service.DEFAULT_PORT)
     runner = str(form.get("runner", "")).strip()[:100]
+    image_tag = str(form.get("image_tag", "")).strip()[:40] or settings.IMAGE_TAG_DEFAULT
     port = install_service.DEFAULT_PORT
     try:
         parsed = ContainerForm.model_validate({"name": name, "port": port_text})
@@ -206,7 +208,7 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
     if error is None:
         try:
             if runner:
-                token = await install_service.register_on_runner(db, name, port, runner, user.username)
+                token = await install_service.register_on_runner(db, name, port, runner, user.username, image_tag)
             else:
                 token, install_token, expires_at = await install_service.register(db, name, port, user.username)
         except NameRejected as err:
@@ -220,7 +222,8 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
         return templates.TemplateResponse(
             request=request, name="dashboard/_wizard_name.html",
             context={"name": name, "port": port_text, "error": error, "step": 1, "runner": runner,
-                     "runner_choices": await _runner_choices(db)},
+                     "runner_choices": await _runner_choices(db), "image_tags": control_service.image_tags(),
+                     "image_tag": image_tag},
             status_code=422, headers={"HX-Retarget": "#wizard", "HX-Reswap": "innerHTML"},
         )
     if runner:
@@ -291,7 +294,10 @@ async def _update_dialog(request, db, name, *, tag=None, error=None, status_code
     return templates.TemplateResponse(
         request=request, name="dashboard/_image_update_dialog.html", status_code=status_code, headers=headers or {},
         context={"name": name, "runner": managed.runner, "current": current, "error": error,
-                 "tag": tag or control_service.suggested_tag(current), "latest": settings.IMAGE_TAG_DEFAULT})
+                 "choices": (choices := control_service.update_choices(current)),
+                 "tag": tag or (suggested if (suggested := control_service.suggested_tag(current)) in choices
+                                else (choices[0] if choices else "")),
+                 "latest": settings.IMAGE_TAG_DEFAULT})
 
 
 @router.get("/containers/{name}/image-update")

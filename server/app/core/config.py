@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     BACKUP_AGE_RECIPIENTS: str = Field(min_length=62)
     # IMAGE_TAG di .env yang disediakan Tambah container; bagian -aN sekaligus versi agen terbaru (app/core/versions.py)
     IMAGE_TAG_DEFAULT: str = "12.3-a7"
+    # Tag zmutclik/mariadb:lumbungdb-<tag> yang bisa dipilih di Tambah container lewat runner dan Update image,
+    # dipisah koma. IMAGE_TAG_DEFAULT selalu ikut.
+    IMAGE_TAGS: str = "12.3-a7,11.4-a7,10.11-a7"
     RUNNER_VERSION_LATEST: str = "r3"    # tag image runner terbaru
     INSTALL_COMMAND_HOURS: int = 2       # batas waktu perintah pasang di Tambah container
     MANUAL_RESTORE_MAX_HOURS: int = 24   # batas terpanjang satu sesi Restore manual, termasuk perpanjangan

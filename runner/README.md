@@ -54,7 +54,7 @@ Di **Tambah container**, pilih *Dipasang di: Mesin runner …* supaya MariaDB la
 menjalankan perintah apa pun. Runner (r3 ke atas) mengambil tugasnya lewat jalur kontrol yang terpisah dari uji restore,
 jadi tidak menunggu uji yang sedang berjalan:
 
-- `docker pull zmutclik/mariadb:lumbungdb-<IMAGE_TAG_DEFAULT>`, lalu `docker run` dengan `--restart always`, batas 2 CPU dan
+- `docker pull zmutclik/mariadb:lumbungdb-<tag>` (tag dipilih dari `IMAGE_TAGS` di `.env` LumbungDB), lalu `docker run` dengan `--restart always`, batas 2 CPU dan
   2g memori, port pilihan admin, volume `<project>_data` dan `<project>_backup`, serta label `lumbung.managed=1`.
 - User aplikasi, user backup, dan semua password dibuat acak di runner dan disimpan di
   `<SCRATCH_DIR>/containers/<nama>/.env` (izin 600). LumbungDB tidak menyimpannya; buka file itu untuk password aplikasi.
@@ -64,7 +64,7 @@ jadi tidak menunggu uji yang sedang berjalan:
 Container yang dipasang lewat runner atau hasil **Naikkan ke production** bisa di-**Start**, **Stop**, dan **Restart**
 dari menu ⋮ di detail container. Runner hanya menyentuh container berlabel `lumbung.managed=1` atau `lumbung.promoted=1`.
 
-**Update image** (menu yang sama) memasang tag `zmutclik/mariadb:lumbungdb-<tag>` lain. Runner menarik image dulu
+**Update image** (menu yang sama) memasang tag `zmutclik/mariadb:lumbungdb-<tag>` lain, dipilih dari `IMAGE_TAGS`. Runner menarik image dulu
 (bila gagal, container tidak disentuh), mematikan restart dan menghentikan container lama, mengganti namanya menjadi
 `<nama>-lama-<tugas>`, lalu menjalankan container baru dengan volume, bind, port, label `lumbung.*`, batas CPU/memori,
 healthcheck, argumen MariaDB, dan `.env` yang sama (`<SCRATCH_DIR>/containers/<nama>/.env`, atau

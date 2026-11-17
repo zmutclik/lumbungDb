@@ -33,6 +33,26 @@ def database_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", re.sub(r"[-_.]db$", "", name, flags=re.IGNORECASE))
 
 
+def _version(tag: str) -> tuple[int, int, int]:
+    found = TAG.fullmatch(tag)
+    return int(found[1]), int(found[2]), int(found[3])
+
+
+def image_tags() -> list[str]:
+    """Daftar tag dari IMAGE_TAGS, terbaru dulu. Tag yang tidak berbentuk 12.3-a7 diabaikan; bawaan selalu ikut."""
+    found = {t.strip() for t in settings.IMAGE_TAGS.split(",") if TAG.fullmatch(t.strip())}
+    if TAG.fullmatch(settings.IMAGE_TAG_DEFAULT):
+        found.add(settings.IMAGE_TAG_DEFAULT)
+    return sorted(found, key=_version, reverse=True)
+
+
+def update_choices(current: str | None) -> list[str]:
+    """Tag yang boleh dipilih di Update image: bukan yang sekarang, dan versi MariaDB tidak turun."""
+    if not current:
+        return image_tags()
+    return [t for t in image_tags() if t != current and _version(t)[:2] >= _version(current)[:2]]
+
+
 def image(tag: str | None = None) -> str:
     return f"zmutclik/mariadb:lumbungdb-{tag or settings.IMAGE_TAG_DEFAULT}"
 
@@ -50,16 +70,21 @@ def install_job(container: str, runner: str, actor: str) -> Job:
     return Job(runner=runner, container=container, kind=KIND_INSTALL, status=service.STATUS_WAITING, requested_by=actor)
 
 
-async def create_install(db: AsyncSession, container: str, runner: str, port: int, actor: str) -> Job:
+async def create_install(db: AsyncSession, container: str, runner: str, port: int, actor: str,
+                         tag: str | None = None) -> Job:
     """Dipanggil sesudah nama terdaftar di agents.conf. Kegagalan di sini diteruskan; pemanggil menarik pendaftarannya."""
     if runner not in runners.entries().active:
         raise service.RunnerError(422, "Pilih runner yang aktif.")
+    tag = tag or settings.IMAGE_TAG_DEFAULT
+    if tag not in image_tags():
+        raise service.RunnerError(422, "Pilih versi MariaDB dari daftar.")
     async with db.begin():
-        db.add(ManagedContainer(container=container, runner=runner, port=port, origin="install", created_by=actor))
+        db.add(ManagedContainer(container=container, runner=runner, port=port, origin="install", created_by=actor,
+                                image_tag=tag))
         job = install_job(container, runner, actor)
         db.add(job)
         db.add(ControlLog(container=container, actor=actor, action="Pasang lewat runner",
-                          detail=f"runner {runner}, port {port}"))
+                          detail=f"runner {runner}, port {port}, image {tag}"))
     return job
 
 
@@ -102,15 +127,19 @@ async def create_power(db: AsyncSession, container: str, action: str, actor: str
 
 
 async def current_tag(db: AsyncSession, container: str) -> str | None:
-    """Tag image yang sedang berjalan: dari agen (versi image), atau dari image yang dilaporkan runner."""
+    """Tag image yang sedang berjalan: dari agen (versi image), dari image yang dilaporkan runner, atau yang tercatat
+    saat dipasang atau diupdate."""
     info = await db.scalar(select(Heartbeat.info).where(Heartbeat.container == container))
     reported = (info or {}).get("agent_version")
     if reported and TAG.fullmatch(reported):
         return reported
-    state = await live_state(db, await db.get(ManagedContainer, container))
+    row = await db.get(ManagedContainer, container)
+    state = await live_state(db, row)
     image_name = (state or {}).get("image", "")
     tag = image_name.rsplit(":lumbungdb-", 1)[-1] if ":lumbungdb-" in image_name else None
-    return tag if tag and TAG.fullmatch(tag) else None
+    if tag and TAG.fullmatch(tag):
+        return tag
+    return row.image_tag if row and row.image_tag and TAG.fullmatch(row.image_tag) else None
 
 
 def suggested_tag(current: str | None) -> str:
@@ -135,6 +164,8 @@ async def create_update(db: AsyncSession, container: str, tag: str, actor: str) 
                 raise service.RunnerError(422, f"Versi MariaDB tidak boleh turun dari {now[1]}.{now[2]}.")
             if tag == current:
                 raise service.RunnerError(422, f"{container} sudah memakai {tag}.")
+        if tag not in image_tags():
+            raise service.RunnerError(422, f"Tag {tag} tidak ada di daftar IMAGE_TAGS LumbungDB.")
         row = await db.get(ManagedContainer, container)
         if row is None:
             raise service.RunnerError(404, "Container ini tidak dipasang lewat runner, jadi tidak bisa diupdate dari sini.")
@@ -164,7 +195,7 @@ async def claim_context(db: AsyncSession, job: Job) -> dict:
     if row is None or token is None:
         return {}
     return {"install": {"name": job.container, "project": project_name(job.container), "port": row.port, "token": token,
-            "age_recipients": settings.BACKUP_AGE_RECIPIENTS, "image": image(), "db_name": database_name(job.container),
+            "age_recipients": settings.BACKUP_AGE_RECIPIENTS, "image": image(row.image_tag), "db_name": database_name(job.container),
             "cpus": DEFAULT_CPUS, "memory": DEFAULT_MEMORY}}
 
 
@@ -172,6 +203,11 @@ async def record_result(db: AsyncSession, job: Job, data: JobResultIn) -> None:
     """Dipanggil dari finish_job di dalam transaksinya."""
     if job.kind not in service.CONTROL_KINDS:
         return
+    if job.kind == KIND_UPDATE and data.status == "Lolos":
+        target = await db.get(ContainerUpdate, job.id)
+        row = await db.get(ManagedContainer, job.container, with_for_update=True)
+        if target is not None and row is not None:
+            row.image_tag = target.image_tag
     detail = f"{data.status}" + (f": {data.note}" if data.note else "")
     db.add(ControlLog(container=job.container, actor=f"runner {job.runner}",
                       action=f"{ACTION_LABEL[job.kind]} container selesai", detail=detail[:500]))

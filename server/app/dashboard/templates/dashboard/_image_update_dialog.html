@@ -7,8 +7,10 @@
     <li>Versi MariaDB yang naik (mis. 11.4 ke 12.3) menjalankan <code>mariadb-upgrade</code> pada datanya dan tidak bisa diturunkan lagi. Pastikan full backup terbaru sudah lolos uji restore.</li>
   </ul>
   <div class="field"><label for="iu-tag">Tag image</label>
-    <input id="iu-tag" name="tag" value="{{ tag }}" required autocomplete="off" spellcheck="false" pattern="\d+\.\d+-a\d+" placeholder="mis. {{ latest }}">
-    <div class="hint">Sekarang: <code>{{ current or "tidak terbaca" }}</code>. Terbaru: <code>{{ latest }}</code>. Image <code>zmutclik/mariadb:lumbungdb-&lt;tag&gt;</code>; samakan versi MariaDB bila hanya ingin agen terbaru.</div></div>
+    {% if choices %}<select id="iu-tag" name="tag" required>
+      {% for t in choices %}<option value="{{ t }}"{% if t == tag %} selected{% endif %}>{{ t }}{% if current and t.split("-a")[0] == current.split("-a")[0] %} (MariaDB sama, agen baru){% elif current %} (MariaDB naik){% endif %}</option>{% endfor %}
+    </select>{% else %}<div class="banner banner-info">Tidak ada tag lain di daftar yang bisa dipakai. Tambahkan tag di <code>IMAGE_TAGS</code> pada <code>.env</code> LumbungDB.</div>{% endif %}
+    <div class="hint">Sekarang: <code>{{ current or "tidak terbaca" }}</code>. Terbaru: <code>{{ latest }}</code>. Image <code>zmutclik/mariadb:lumbungdb-&lt;tag&gt;</code>; daftar dari <code>IMAGE_TAGS</code>, tanpa versi MariaDB yang lebih rendah.</div></div>
   <div class="field"><label><input type="checkbox" name="confirm" value="yes" required> Saya mengerti {{ name }} berhenti sebentar.</label></div>
-  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Update image</button></div>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit"{% if not choices %} disabled{% endif %}>Update image</button></div>
 </form>

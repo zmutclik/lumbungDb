@@ -170,6 +170,7 @@ class ManagedContainer(Base):
     runner: Mapped[str] = mapped_column(String(NAME_LENGTH))
     port: Mapped[int] = mapped_column()
     origin: Mapped[str] = mapped_column(String(20))          # install | promote
+    image_tag: Mapped[str | None] = mapped_column(String(40))   # dipasang atau hasil Update image terakhir; promote: kosong
     created_by: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

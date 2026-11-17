@@ -198,3 +198,40 @@ async def test_update_not_offered_for_unmanaged(client, csrf, runner_headers):
     resp = await client.post("/containers/lain-db/image-update", data={"tag": "12.3-a7", "confirm": "yes"},
                              headers=post_headers(csrf))
     assert resp.status_code == 404
+
+
+async def test_image_tags_from_setting_sorted_with_default(monkeypatch):
+    from app.runners import control
+    monkeypatch.setattr(settings, "IMAGE_TAGS", "11.4-a7, salah ,10.11-a7,11.4-a6")
+    monkeypatch.setattr(settings, "IMAGE_TAG_DEFAULT", "12.3-a7")
+    assert control.image_tags() == ["12.3-a7", "11.4-a7", "11.4-a6", "10.11-a7"]
+    assert control.update_choices("11.4-a6") == ["12.3-a7", "11.4-a7"]
+    assert control.update_choices(None) == control.image_tags()
+
+
+async def test_install_uses_chosen_tag_and_update_records_new_tag(client, csrf, runner_headers):
+    resp = await client.post("/containers", data={"name": NAME, "port": "3310", "runner": "runner-1",
+                                                  "image_tag": "11.4-a7"}, headers=post_headers(csrf))
+    assert resp.status_code == 200, resp.text
+    job = await claim(client, runner_headers)
+    assert job["install"]["image"] == "zmutclik/mariadb:lumbungdb-11.4-a7"
+    await client.post(f"/api/runner/jobs/{job['id']}/result", headers=runner_headers, json={"status": "Lolos"})
+    dialog = (await client.get(f"/containers/{NAME}/image-update")).text
+    assert "<code>11.4-a7</code>" in dialog                          # dari catatan pemasangan, tanpa heartbeat
+    assert 'value="12.3-a7"' in dialog and 'value="10.11-a7"' not in dialog and 'value="11.4-a7"' not in dialog
+    await client.post(f"/containers/{NAME}/image-update", data={"tag": "12.3-a7", "confirm": "yes"},
+                      headers=post_headers(csrf))
+    job = await claim(client, runner_headers)
+    await client.post(f"/api/runner/jobs/{job['id']}/result", headers=runner_headers, json={"status": "Lolos"})
+    async with async_session_factory() as db:
+        assert (await db.get(ManagedContainer, NAME)).image_tag == "12.3-a7"
+
+
+async def test_tag_outside_list_is_refused(client, csrf, runner_headers):
+    resp = await client.post("/containers", data={"name": NAME, "runner": "runner-1", "image_tag": "99.9-a1"},
+                             headers=post_headers(csrf))
+    assert resp.status_code == 422 and "dari daftar" in resp.text and NAME not in agents.entries().active
+    await installed(client, csrf, runner_headers)
+    resp = await client.post(f"/containers/{NAME}/image-update", data={"tag": "12.4-a7", "confirm": "yes"},
+                             headers=post_headers(csrf))
+    assert resp.status_code == 422 and "IMAGE_TAGS" in resp.text
