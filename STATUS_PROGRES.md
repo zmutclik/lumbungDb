@@ -55,8 +55,8 @@ Semua uji memakai folder lokal sebagai NAS, Telegram tiruan, dan data contoh. Be
   container dan script pasangnya, penanda mode sidecar di dashboard (kartu tuning tetap tampil), runner dengan image
   per versi MariaDB (sekarang satu `MARIADB_IMAGE` per runner), dan uji dengan tag `zmutclik/mariadb` lama.
 - Tambah container lewat runner, Start/Stop/Restart, dan CPU/memori mesin runner (17 November 2026): butuh image runner
-  r3 yang belum dibangun; `RUNNER_VERSION_LATEST` masih r2. Runner r2 tidak mengambil tugas jalur kontrol, jadi
-  pemasangan lewat runner r2 menunggu terus. Diuji dengan Docker sungguhan di mesin dev (pasang, stop, start, restart,
+  r3 (`zmutclik/lumbungdb-runner:r3` di Docker Hub sejak 17 November 2026; `RUNNER_VERSION_LATEST` r3). Runner r2
+  tidak mengambil tugas jalur kontrol, jadi pemasangan lewat runner r2 menunggu terus sampai runner-nya diupdate. Diuji dengan Docker sungguhan di mesin dev (pasang, stop, start, restart,
   login user aplikasi), belum lewat runner yang berjalan di container dan belum lewat dashboard sungguhan.
   Batas CPU dan memori container hasil pasang tetap 2 dan 2g; belum bisa diatur dari dashboard.
   Update image juga sudah ada dan diuji di Docker sungguhan (11.4-a7 ke 12.3-a7, data utuh). Pemulihan ke container
