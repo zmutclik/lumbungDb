@@ -59,6 +59,15 @@
   {% endfor %}
   </tbody></table></div>
   {% endif %}
+  {% if s.slow_patterns %}
+  <h3>Pola slow query terberat</h3>
+  <div class="tbl-wrap"><table class="t"><thead><tr><th>Pola query</th><th class="num">Eksekusi</th><th class="num">Rata-rata</th><th class="num">Total</th><th class="num">Baris diperiksa / eksekusi</th><th class="num">Tanpa index</th></tr></thead><tbody>
+  {% for q in s.slow_patterns %}
+  <tr><td><span class="muted small">{{ q.database or "—" }}</span><br><code class="small">{{ q.text }}</code></td><td class="num">{{ q.count | bulat }}</td><td class="num">{{ q.avg_seconds | angka }} dtk</td><td class="num">{{ q.total_seconds | angka }} dtk</td><td class="num">{{ q.rows_per_exec | bulat }}</td><td class="num">{{ q.no_index_used | bulat }}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  <p class="hint">Dari log slow query saat laporan terbit; log yang sudah dikosongkan tidak ikut.</p>
+  {% endif %}
   {% if s.previous %}<p class="hint">Pembanding: periode sebelumnya yang sama panjang. Kueri {{ s.previous.queries | bulat }}, CPU rata-rata {{ s.previous.cpu_avg | persen }}, slow query {{ s.previous.slow_queries | bulat }}.</p>{% endif %}
   {% endif %}
 </section>

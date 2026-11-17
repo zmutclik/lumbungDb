@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.reports import rules
 from app.reports.models import DailyMetric
 from app.runners.models import RestoreTest
+from app.slow_queries import service as slow_service
 
 KINDS = {"monthly": 1, "quarterly": 3, "semiannual": 6, "yearly": 12}     # panjang periode dalam bulan
 LABELS = {"monthly": "bulanan", "quarterly": "3 bulanan", "semiannual": "6 bulanan", "yearly": "tahunan"}
@@ -29,6 +30,7 @@ SUMS = ("queries", "select", "insert", "update", "delete", "sessions", "bytes_in
 WEIGHTED = ("qps_avg", "cpu_avg", "rss_avg", "threads_avg")        # rata-rata harian, berbobot menit tercakup
 PEAKS = ("qps_peak", "cpu_peak", "rss_max", "threads_max", "running_max")
 LAST = ("max_connections", "memory_limit", "cpus")
+SLOW_PATTERNS = 5      # pola slow query terberat per container, dari log slow query
 COMPARE = ("queries", "qps_avg", "cpu_avg", "rss_max", "slow_queries", "size_growth")
 
 
@@ -226,6 +228,9 @@ async def section(db: AsyncSession, name: str, registered_at: datetime, kind: st
     stats["restore_tests"] = {"passed": tests.passed, "failed": tests.failed, "skipped": tests.skipped}
     if tests.failed:
         findings.append(rules.Finding("bad", f"{tests.failed} uji restore gagal"))
+    slow = await slow_service.patterns(db, name, start, end, limit=SLOW_PATTERNS)
+    if slow:
+        stats["slow_patterns"] = [pattern.as_dict() for pattern in slow]
     full = await db.scalar(select(Backup.size).where(Backup.container == name, Backup.kind == "fullbackup",
                                                      Backup.backup_at < end).order_by(Backup.backup_at.desc()).limit(1))
     if full is not None:

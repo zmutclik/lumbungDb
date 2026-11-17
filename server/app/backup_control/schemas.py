@@ -59,6 +59,7 @@ class MetricsIn(BaseModel):
     sizes: MetricsSizes | None = None
     digests: list[dict] | None = Field(default=None, max_length=10)
     indexes: list[dict] | None = Field(default=None, max_length=100)
+    slow: list[dict] | None = Field(default=None, max_length=50)   # agen a6 ke atas, tiap jam
     process: ProcessIn | None = None
 
 

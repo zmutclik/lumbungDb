@@ -6,7 +6,9 @@ from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backup_control.schemas import MetricsIn
+from app.core.config import settings
 from app.reports.models import NAME, DailyMetric, Metric, MetricCounter, StatusSample
+from app.slow_queries import service as slow_service
 
 # Nama di SHOW GLOBAL STATUS → nama metrik
 COUNTER_NAMES = {
@@ -94,6 +96,8 @@ async def ingest(db: AsyncSession, container: str, metrics: MetricsIn | None, di
             delta = await _counter_delta(db, container, name, status[source], uptime)
             if delta:
                 await _add(db, container, at, name, delta)
+    if metrics.slow is not None:
+        await slow_service.ingest(db, container, metrics.slow, status.get("Uptime"), at)
     if metrics.sizes:
         for item in metrics.sizes.databases:
             if isinstance(item.get("name"), str) and isinstance(item.get("bytes"), int):
@@ -111,3 +115,4 @@ async def purge(db: AsyncSession, before: datetime, before_day: date) -> None:
         await db.execute(delete(DailyMetric).where(DailyMetric.day < before_day))
         now = await db.scalar(select(func.now()))
         await db.execute(delete(StatusSample).where(StatusSample.at < now - SAMPLE_RETENTION))
+        await slow_service.purge(db, now - timedelta(days=settings.DAILY_METRICS_RETENTION_DAYS))

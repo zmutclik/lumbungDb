@@ -17,6 +17,11 @@ MAX_TABLES = 10
 MAX_DIGESTS = 10
 DIGEST_TEXT_LIMIT = 300
 MAX_INDEX_TABLES = 20
+# Slow query: pola yang pernah berjalan >= SLOW_MIN_SECONDS, dikirim tiap jam. LumbungDB menghitung selisih per jam dan
+# menyaring lagi dengan batasnya sendiri, jadi nilai di sini hanya saringan kasar.
+SLOW_INTERVAL_SECONDS = 3600
+SLOW_MIN_SECONDS = 1
+MAX_SLOW = 50
 MAX_INDEX_ROWS = 100
 
 # Penghitung kumulatif (selisihnya dihitung LumbungDB) dan nilai sesaat.
@@ -42,6 +47,16 @@ _DIGEST_SQL = ("SELECT COALESCE(schema_name,''), digest_text, count_star, sum_ti
                "FROM performance_schema.events_statements_summary_by_digest "
                f"WHERE COALESCE(schema_name,'') NOT IN ({_SCHEMA_LIST}) AND digest_text IS NOT NULL "
                f"ORDER BY sum_timer_wait DESC LIMIT {MAX_DIGESTS}")
+
+_SLOW_SQL = ("SELECT COALESCE(schema_name,''), digest, digest_text, count_star, sum_timer_wait, max_timer_wait, "
+             "sum_rows_examined, sum_rows_sent, sum_no_index_used, sum_no_good_index_used, sum_select_full_join, "
+             "sum_created_tmp_disk_tables "
+             "FROM performance_schema.events_statements_summary_by_digest "
+             f"WHERE COALESCE(schema_name,'') NOT IN ({_SCHEMA_LIST}) AND digest_text IS NOT NULL "
+             f"AND digest IS NOT NULL AND max_timer_wait >= {SLOW_MIN_SECONDS * 10**12} "
+             f"ORDER BY sum_timer_wait DESC LIMIT {MAX_SLOW}")
+_SLOW_FIELDS = ("count", "total_ps", "max_ps", "rows_examined", "rows_sent", "no_index_used", "no_good_index_used",
+                "full_join", "tmp_disk_tables")
 
 
 def query(sql, runner=subprocess.run, timeout=20):
@@ -214,6 +229,24 @@ def collect_digests(runner=subprocess.run):
     return digests
 
 
+def collect_slow(runner=subprocess.run):
+    """Pola query yang pernah lambat, dengan penghitung kumulatif sejak MariaDB mulai. Teks digest tanpa nilai literal.
+    None bila gagal dibaca."""
+    rows = query(_SLOW_SQL, runner, timeout=60)
+    if rows is None:
+        return None
+    slow = []
+    for row in rows:
+        if len(row) != 12:
+            continue
+        numbers = [_number(value) for value in row[3:]]
+        if None in numbers or not row[1]:
+            continue
+        slow.append({"database": row[0][:64], "digest": row[1][:64], "text": row[2][:DIGEST_TEXT_LIMIT],
+                     **dict(zip(_SLOW_FIELDS, numbers, strict=True))})
+    return slow
+
+
 _TABLE_REF = re.compile(r"\b(?:from|join|update|into)\s+`?(\w+)`?(?:\s*\.\s*`?(\w+)`?)?", re.IGNORECASE)
 _STATISTICS_SQL = ("SELECT table_schema, table_name, index_name, non_unique, "
                    "GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') "
@@ -262,6 +295,7 @@ class Collector:
         self.runner = runner
         self.process = process
         self.last_sizes_at = None
+        self.last_slow_at = None
 
     def payload(self):
         sample = collect_sample(self.runner)
@@ -286,4 +320,10 @@ class Collector:
                         if indexes is not None:
                             sample["indexes"] = indexes
                 self.last_sizes_at = now
+        if sample["performance_schema"] and (
+                self.last_slow_at is None or now - self.last_slow_at >= SLOW_INTERVAL_SECONDS):
+            slow = collect_slow(self.runner)
+            if slow is not None:
+                sample["slow"] = slow
+                self.last_slow_at = now
         return sample

@@ -198,3 +198,25 @@ def test_sidecar_process_omits_limits_of_its_own_cgroup(metrics, tmp_path, monke
     sample = metrics.collect_process(proc, cgroup)
     assert sample["rss_bytes"] == 200 * 1024 * 1024
     assert sample["memory_limit"] is None and sample["cpus"] is None
+
+
+SLOW = "siak\tabc123\tSELECT * FROM `pasien` WHERE `nama` LIKE ?\t10\t30000000000000\t5000000000000\t9000\t10\t10\t0\t0\t1\n"
+
+
+def test_slow_patterns_are_parsed_and_bad_rows_skipped(metrics):
+    out = metrics.collect_slow(fake({"max_timer_wait >=": SLOW + "siak\t\tx\t1\t2\t3\t4\t5\t6\t7\t8\t9\nrusak\n"}))
+    assert out == [{"database": "siak", "digest": "abc123", "text": "SELECT * FROM `pasien` WHERE `nama` LIKE ?",
+                    "count": 10, "total_ps": 30 * 10**12, "max_ps": 5 * 10**12, "rows_examined": 9000, "rows_sent": 10,
+                    "no_index_used": 10, "no_good_index_used": 0, "full_join": 0, "tmp_disk_tables": 1}]
+    assert metrics.collect_slow(fake({})) is None
+
+
+def test_slow_patterns_sent_hourly(metrics):
+    now = [1000.0]
+    outputs = {"max_timer_wait >=": SLOW, **OUTPUTS}   # penanda slow lebih dulu: SQL-nya juga memuat nama tabel digest
+    collector = metrics.Collector(lambda: now[0], fake(outputs))
+    assert len(collector.payload()["slow"]) == 1
+    now[0] += 600
+    assert "slow" not in collector.payload()
+    now[0] += metrics.SLOW_INTERVAL_SECONDS
+    assert "slow" in collector.payload()

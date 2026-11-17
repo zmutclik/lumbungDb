@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 from datetime import UTC, datetime, time, timedelta
 
@@ -26,6 +28,7 @@ from app.nas import scan as nas_scan
 from app.nas import service as nas_service
 from app.notifications import service as notification_service
 from app.runner_admin import service as runner_view
+from app.slow_queries import service as slow_service
 from app.runners import service as runner_service
 from app.runners import promote as promote_service
 from app.runners import standby as standby_service
@@ -326,6 +329,64 @@ async def container_backup(
         request_pill=view.REQUEST_PILL,
     )
     return render(request, "dashboard/container.html", "dashboard/_container_backup.html", context)
+
+
+# ---------- slow query ----------
+SLOW_RANGES = (1, 7, 30, 90, 365)
+
+
+def _slow_range(hari: int, now: datetime) -> tuple[int, datetime]:
+    days = hari if hari in SLOW_RANGES else 7
+    return days, now - timedelta(days=days)
+
+
+@router.get("/containers/{name}/slow-query")
+async def container_slow(name: str, request: Request, user: CurrentUserDep, db: DbSession, hari: int = 7):
+    context = await _detail_context(db, user, name, "slow")
+    days, start = _slow_range(hari, context["now"])
+    rows = await slow_service.patterns(db, name, start, context["now"] + timedelta(hours=1))
+    context.update(
+        days=days, ranges=SLOW_RANGES, patterns=rows, threshold=settings.SLOW_QUERY_SECONDS,
+        retention_days=settings.DAILY_METRICS_RETENTION_DAYS,
+        total_count=sum(r.count for r in rows), total_seconds=sum(r.total_seconds for r in rows),
+        oldest=await slow_service.oldest(db, name), last_clear=await slow_service.last_clear(db, name),
+        performance_schema=(context["view"].state.info.get("metrics") or {}).get("performance_schema"),
+    )
+    response = render(request, "dashboard/container.html", "dashboard/_container_slow.html", context)
+    if request.headers.get("hx-trigger-name") == "hari":
+        response.headers["HX-Push-Url"] = f"/containers/{name}/slow-query?hari={days}"
+    return response
+
+
+@router.get("/containers/{name}/slow-query.csv")
+async def container_slow_csv(name: str, user: CurrentUserDep, db: DbSession, hari: int = 7):
+    base = await _base(db, user, "containers")
+    _find(base, name)
+    days, start = _slow_range(hari, base["now"])
+    rows = await slow_service.patterns(db, name, start, base["now"] + timedelta(hours=1),
+                                       limit=slow_service.MAX_PATTERNS * 5)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["database", "pola_query", "eksekusi", "total_detik", "rata2_detik", "terlama_detik",
+                     "baris_diperiksa_per_eksekusi", "tanpa_index", "index_kurang_baik", "join_tanpa_index",
+                     "tabel_sementara_disk", "jam_tercatat", "pertama_wib", "terakhir_wib"])
+    for r in rows:
+        writer.writerow([r.database, r.text, r.count, f"{r.total_seconds:.3f}", f"{r.avg_seconds:.3f}",
+                         f"{r.max_seconds:.3f}", round(r.rows_per_exec), r.no_index_used, r.no_good_index_used,
+                         r.full_join, r.tmp_disk_tables, r.hours,
+                         view.local_now(r.first_at).isoformat(sep=" ", timespec="minutes"),
+                         view.local_now(r.last_at).isoformat(sep=" ", timespec="minutes")])
+    filename = f"slow-query-{name}-{view.local_now(base['now']).date().isoformat()}-{days}hari.csv"
+    return Response(out.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.post("/containers/{name}/slow-query/clear")
+async def container_slow_clear(name: str, user: CurrentUserDep, db: DbSession):
+    _find(await _base(db, user, "containers"), name)
+    await db.rollback()
+    removed = await slow_service.clear(db, name, user.username)
+    return _done(f"Log slow query {name} dikosongkan ({removed} baris).", modal=False)
 
 
 @router.get("/containers/{name}/disable")

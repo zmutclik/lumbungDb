@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     REPORT_CONN_WARN_PERCENT: int = 80
     REPORT_HITRATIO_MIN: int = 95
     REPORT_SLOW_QUERIES_MAX: int = 100
+    SLOW_QUERY_SECONDS: float = Field(default=1.0, ge=1.0)   # rata-rata per eksekusi dalam satu jam; agen menyaring >= 1 detik
     REPORT_DISK_WARN_DAYS: int = 14
     REPORT_DISK_BAD_DAYS: int = 7
     REPORT_FORECAST_DAYS: int = 14              # riwayat disk yang dipakai regresi

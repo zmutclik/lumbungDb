@@ -1,0 +1,22 @@
+{% import "dashboard/_macros.html" as ui %}
+<div {{ ui.live(request) }}>
+{% include "dashboard/_container_head.html" %}
+<div class="section-title"><h2>Log slow query</h2><span class="muted small">pola query dengan rata-rata ≥ {{ threshold | angka }} detik per eksekusi dalam satu jam · tanpa nilai literal</span>
+  <select class="seg-end" name="hari" aria-label="Rentang waktu" hx-get="/containers/{{ view.name }}/slow-query" hx-trigger="change" hx-target="#live" hx-swap="outerHTML">{% for option in ranges %}<option value="{{ option }}"{% if days == option %} selected{% endif %}>{{ "24 jam" if option == 1 else option ~ " hari" }} terakhir</option>{% endfor %}</select></div>
+{% if performance_schema is false %}<div class="banner banner-warn"><b>performance_schema mati di MariaDB ini.</b> Slow query tidak bisa dicatat sampai <code>performance_schema=ON</code> dan MariaDB di-restart.</div>{% endif %}
+<div class="tiles tiles-3">
+  <div class="tile"><small>Eksekusi lambat</small><b>{{ total_count | bulat }}</b><span class="muted">{{ patterns | length }} pola</span></div>
+  <div class="tile"><small>Total waktu</small><b>{{ total_seconds | angka }} dtk</b><span class="muted">dari pola di bawah</span></div>
+  <div class="tile"><small>Dicatat sejak</small><b>{{ oldest | tanggal_saja }}</b><span class="muted">{% if last_clear %}dikosongkan {{ last_clear.at | tanggal }} oleh {{ last_clear.actor }}{% else %}disimpan {{ retention_days }} hari{% endif %}</span></div>
+</div>
+{% if patterns %}
+<div class="tbl-wrap mt"><table class="t"><thead><tr><th>Pola query</th><th class="num">Eksekusi</th><th class="num">Rata-rata</th><th class="num">Total</th><th class="num">Terlama</th><th class="num">Baris diperiksa / eksekusi</th><th>Catatan</th><th>Terakhir</th></tr></thead><tbody>
+{% for r in patterns %}<tr><td><span class="muted small">{{ r.database or "—" }}</span><br><code class="small">{{ r.text }}</code></td><td class="num">{{ r.count | bulat }}</td><td class="num">{{ r.avg_seconds | angka }} dtk</td><td class="num">{{ r.total_seconds | angka }} dtk</td><td class="num">{{ r.max_seconds | angka }} dtk</td><td class="num">{{ r.rows_per_exec | bulat }}</td>
+  <td class="small">{% if r.no_index_used %}<span class="pill pill-warn">tanpa index {{ r.no_index_used | bulat }}×</span> {% elif r.no_good_index_used %}<span class="pill pill-warn">index kurang baik {{ r.no_good_index_used | bulat }}×</span> {% endif %}{% if r.full_join %}<span class="pill pill-warn">join tanpa index</span> {% endif %}{% if r.tmp_disk_tables %}<span class="pill pill-wait">tabel sementara di disk</span>{% endif %}</td>
+  <td class="small">{{ r.last_at | tanggal }}<br><span class="muted">{{ r.hours }} jam tercatat</span></td></tr>
+{% endfor %}</tbody></table></div>
+{% else %}<div class="card mt"><div class="empty"><b>Belum ada slow query pada rentang ini</b>Agen mengirim pola query yang pernah berjalan ≥ 1 detik tiap jam (agen a6 ke atas). Kiriman pertama hanya menjadi acuan, jadi catatan mulai muncul satu jam sesudahnya.</div></div>{% endif %}
+<div class="actions mt-s"><a class="btn" href="/containers/{{ view.name }}/slow-query.csv?hari={{ days }}">Unduh CSV</a>
+  <button class="btn btn-danger" hx-post="/containers/{{ view.name }}/slow-query/clear" hx-swap="none" hx-disabled-elt="this" hx-confirm="Kosongkan seluruh log slow query {{ view.name }}? Catatan yang dihapus tidak bisa dikembalikan, termasuk untuk laporan periode yang belum terbit. Penghitung di MariaDB tidak diubah.">Kosongkan log</button></div>
+<p class="small muted mt-s">Terlama = eksekusi terlama sejak MariaDB terakhir mulai. Angka dari <code>performance_schema</code>, bukan slow log MariaDB, jadi tidak bergantung pada <code>long_query_time</code>. Kosongkan log hanya menghapus catatan di LumbungDB; tindakan ini tercatat di riwayat Backup &amp; log.</p>
+</div>
