@@ -9,6 +9,12 @@
   <div class="field"><label for="wiz-port">Port di server</label>
     <input type="number" id="wiz-port" name="port" value="{{ port or 3306 }}" min="1" max="65535" required>
     <div class="hint">Port MariaDB di server tujuan. Script menolak bila port sudah terpakai.</div></div>
+  <div class="field"><label for="wiz-runner">Dipasang di</label>
+    <select id="wiz-runner" name="runner">
+      <option value=""{% if not runner %} selected{% endif %}>Server lain: jalankan perintah pasang sendiri</option>
+      {% for r in runner_choices or [] %}<option value="{{ r.name }}"{% if r.name == runner %} selected{% endif %}>Mesin runner {{ r.name }}{% if r.server %} ({{ r.server }}){% endif %} · {{ r.status_text }}{% if r.mem_available is not none %} · memori bebas {{ r.mem_available | filesize }}{% endif %}</option>{% endfor %}
+    </select>
+    <div class="hint">Pilih runner supaya MariaDB langsung dipasang di mesin runner itu, tanpa menjalankan perintah apa pun. Sesudahnya container bisa di-start, stop, dan restart dari dashboard. User dan password dibuat acak di mesin runner (<code>&lt;SCRATCH_DIR&gt;/containers/&lt;nama&gt;/.env</code>), tidak dikirim ke LumbungDB.</div></div>
   <p class="hint">Server tidak perlu diisi. Agen membacanya dari mesin tempat container berjalan dan mengirimnya lewat heartbeat.</p>
-  <div class="wiz-actions"><button class="btn btn-pri" id="wiz-next" type="submit"{% if error or not name %} disabled{% endif %}>Lanjut: buat perintah ›</button><a class="btn" href="/containers">Batal</a></div>
+  <div class="wiz-actions"><button class="btn btn-pri" id="wiz-next" type="submit"{% if error or not name %} disabled{% endif %}>Lanjut ›</button><a class="btn" href="/containers">Batal</a></div>
 </form></div>

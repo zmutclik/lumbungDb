@@ -52,7 +52,13 @@ async def _drop_unlisted(db: AsyncSession) -> None:
 
 
 async def _forget(db: AsyncSession, name: str) -> None:
+    from app.runners.models import ContainerUpdate, Job, ManagedContainer
+    from app.runners.service import CONTROL_KINDS
     await db.execute(delete(ControlLog).where(ControlLog.container == name))   # hanya catatan perintah pasang
+    await db.execute(delete(ContainerUpdate).where(ContainerUpdate.job_id.in_(
+        select(Job.id).where(Job.container == name).scalar_subquery())))
+    await db.execute(delete(Job).where(Job.container == name, Job.kind.in_(CONTROL_KINDS)))   # pasang lewat runner
+    await db.execute(delete(ManagedContainer).where(ManagedContainer.container == name))
     await db.execute(delete(Container).where(Container.name == name))
 
 

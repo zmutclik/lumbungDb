@@ -9,7 +9,7 @@ from app.containers.models import Container
 from app.core.database import async_session_factory
 from app.runners import promote, service, standby
 from app.runners.dependencies import registry as runners
-from app.runners.models import ContainerSettings, Job, Promotion, RunnerHeartbeat, Standby, StandbyRun
+from app.runners.models import ContainerSettings, Job, ManagedContainer, Promotion, RunnerHeartbeat, Standby, StandbyRun
 from app.runners.schemas import JobResultIn, RunnerHeartbeatIn
 from tests.test_runners import clean_files, set_nas  # noqa: F401
 from tests.test_standby import NAME, finish, full_job, standby_row, world  # noqa: F401,F811
@@ -123,6 +123,9 @@ async def test_success_moves_standby_into_new_container(ready):
     assert old.standby_enabled is False
     assert (first_full.kind, first_full.status) == ("full", "Menunggu")
     assert (run.kind, run.status) == ("naik", "Lolos")
+    async with async_session_factory() as db:
+        managed = await db.get(ManagedContainer, "siak-db-2")
+    assert (managed.runner, managed.port, managed.origin) == ("runner-1", 3306, "promote")    # bisa start/stop
 
 
 async def test_runner_on_same_server_is_used_when_no_other(ready):

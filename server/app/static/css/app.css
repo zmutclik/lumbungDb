@@ -596,6 +596,10 @@ input[type=password]:focus { border-color: var(--accent); outline: 2px solid var
 .bar-meter::-webkit-progress-bar { background: var(--line); }
 .bar-meter::-webkit-progress-value { background: var(--c-main); }
 .bar-meter::-moz-progress-bar { background: var(--c-main); }
+.bar-meter.bar-warn::-webkit-progress-value { background: var(--warn); }
+.bar-meter.bar-warn::-moz-progress-bar { background: var(--warn); }
+.bar-meter.bar-bad::-webkit-progress-value { background: var(--bad); }
+.bar-meter.bar-bad::-moz-progress-bar { background: var(--bad); }
 .seg-link { display: inline-block; font-size: 13px; padding: 6px 14px; color: var(--text-2); border-right: 1px solid var(--line); }
 .seg-link:last-child { border-right: 0; }
 .seg-link:hover { background: var(--surface-2); text-decoration: none; }

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CHAR, JSON, BigInteger, ForeignKey, Index, String, Text, func
+from sqlalchemy import CHAR, JSON, BigInteger, Float, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.backups.models import Backup
@@ -21,6 +21,13 @@ class RunnerHeartbeat(Base):
     version: Mapped[str | None] = mapped_column(String(40))
     scratch_total: Mapped[int | None] = mapped_column(BigInteger)
     scratch_free: Mapped[int | None] = mapped_column(BigInteger)
+    # Seluruh mesin runner (VM atau komputer), bukan container runner saja
+    cpu_percent: Mapped[float | None] = mapped_column(Float)
+    cpu_count: Mapped[int | None] = mapped_column()
+    load1: Mapped[float | None] = mapped_column(Float)
+    mem_total: Mapped[int | None] = mapped_column(BigInteger)
+    mem_available: Mapped[int | None] = mapped_column(BigInteger)
+    containers: Mapped[list | None] = mapped_column(JSON)     # [{name, state, status}] container yang dikelola runner
     at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -151,3 +158,26 @@ class Promotion(Base):
     port: Mapped[int] = mapped_column()
     requested_by: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ManagedContainer(Base):
+    """Container yang dipasang (Tambah container lewat runner) atau dinaikkan di mesin runner. Hanya container ini yang
+    bisa di-start/stop/restart dari dashboard, dan hanya lewat runner yang memegangnya."""
+
+    __tablename__ = "managed_containers"
+
+    container: Mapped[str] = mapped_column(String(NAME_LENGTH), ForeignKey("containers.name"), primary_key=True)
+    runner: Mapped[str] = mapped_column(String(NAME_LENGTH))
+    port: Mapped[int] = mapped_column()
+    origin: Mapped[str] = mapped_column(String(20))          # install | promote
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ContainerUpdate(Base):
+    """Tag image tujuan untuk tugas Update image."""
+
+    __tablename__ = "container_updates"
+
+    job_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("jobs.id"), primary_key=True)
+    image_tag: Mapped[str] = mapped_column(String(40))

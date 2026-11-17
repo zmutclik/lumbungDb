@@ -1,7 +1,7 @@
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Literal
 
 import anyio
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -35,8 +35,8 @@ async def heartbeat(data: RunnerHeartbeatIn, runner: RunnerName, db: DbSession):
 
 
 @router.post("/jobs/claim")
-async def claim(runner: RunnerName, db: DbSession):
-    return {"job": await service.claim_next(db, runner)}
+async def claim(runner: RunnerName, db: DbSession, lane: Literal["main", "control"] = "main"):
+    return {"job": await service.claim_next(db, runner, lane)}
 
 
 @router.post("/jobs/{job_id}/progress")

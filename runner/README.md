@@ -48,6 +48,35 @@ Paling rapi: update saat kolom **Tugas berjalan** di halaman Runner kosong. Kemb
 Uji sungguhan terhadap Docker tanpa LumbungDB: `python3 scripts/sim/runner_real.py <image>` (tambah `--corrupt` untuk
 memastikan full yang rusak terdeteksi Gagal).
 
+## Container yang dikelola runner
+
+Di **Tambah container**, pilih *Dipasang di: Mesin runner …* supaya MariaDB langsung dipasang di mesin runner itu tanpa
+menjalankan perintah apa pun. Runner (r3 ke atas) mengambil tugasnya lewat jalur kontrol yang terpisah dari uji restore,
+jadi tidak menunggu uji yang sedang berjalan:
+
+- `docker pull zmutclik/mariadb:lumbungdb-<IMAGE_TAG_DEFAULT>`, lalu `docker run` dengan `--restart always`, batas 2 CPU dan
+  2g memori, port pilihan admin, volume `<project>_data` dan `<project>_backup`, serta label `lumbung.managed=1`.
+- User aplikasi, user backup, dan semua password dibuat acak di runner dan disimpan di
+  `<SCRATCH_DIR>/containers/<nama>/.env` (izin 600). LumbungDB tidak menyimpannya; buka file itu untuk password aplikasi.
+- Ditolak bila container atau volume bernama sama sudah ada. Bila `docker run` gagal (mis. port terpakai), container,
+  volume baru, dan `.env`-nya dibuang supaya bisa **Pasang ulang** dari halaman verifikasi.
+
+Container yang dipasang lewat runner atau hasil **Naikkan ke production** bisa di-**Start**, **Stop**, dan **Restart**
+dari menu ⋮ di detail container. Runner hanya menyentuh container berlabel `lumbung.managed=1` atau `lumbung.promoted=1`.
+
+**Update image** (menu yang sama) memasang tag `zmutclik/mariadb:lumbungdb-<tag>` lain. Runner menarik image dulu
+(bila gagal, container tidak disentuh), mematikan restart dan menghentikan container lama, mengganti namanya menjadi
+`<nama>-lama-<tugas>`, lalu menjalankan container baru dengan volume, bind, port, label `lumbung.*`, batas CPU/memori,
+healthcheck, argumen MariaDB, dan `.env` yang sama (`<SCRATCH_DIR>/containers/<nama>/.env`, atau
+`PROMOTE_DIR/<nama>/.env` untuk hasil penaikan). ENV dari inspect tidak disalin, karena berisi ENV image lama. Bila
+yang baru tidak sehat, ia dibuang (tanpa volume) dan yang lama dijalankan lagi. LumbungDB menolak versi MariaDB yang
+turun. Versi MariaDB yang naik menjalankan `mariadb-upgrade`; bila gagal di tengah, container lama mungkin tidak bisa
+membaca datanya lagi, jadi pastikan ada full backup yang lolos uji.
+
+Heartbeat runner juga membawa CPU (rata-rata sejak heartbeat sebelumnya), load, dan memori seluruh mesin dari `/proc`
+(di VM atau komputer tanpa lxcfs, angka ini milik host, bukan container runner), serta status container yang dikelolanya.
+Semua tampil di halaman Runner.
+
 ## Naikkan ke production
 
 Tugas `standby_promote` mengubah database cadangan di mesin ini menjadi container production bernama baru:

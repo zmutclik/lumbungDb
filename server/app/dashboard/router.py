@@ -32,6 +32,7 @@ from app.slow_queries import service as slow_service
 from app.runners import service as runner_service
 from app.runners import promote as promote_service
 from app.runners import standby as standby_service
+from app.runners import control as control_service
 from app.runners.dependencies import registry as runner_registry
 from app.containers.models import Heartbeat
 from app.runners.models import RunnerHeartbeat
@@ -156,11 +157,21 @@ async def containers_page(request: Request, user: CurrentUserDep, db: DbSession)
                    "server_count": sum(1 for g in groups if g.title != view.NOT_CONNECTED)})
 
 
+async def _runner_choices(db) -> list[dict]:
+    """Runner aktif untuk Tambah container, dengan status sehat dan sisa memori mesinnya."""
+    rows = await runner_view.runner_rows(db)
+    return [{"name": r.name, "status": r.status, "status_text": r.status_text,
+             "server": r.heartbeat.server if r.heartbeat else None,
+             "mem_available": r.heartbeat.mem_available if r.heartbeat else None}
+            for r in rows if r.active]
+
+
 @router.get("/containers/new")
 async def new_container_page(request: Request, user: CurrentUserDep, db: DbSession):
     base = await _base(db, user, "containers")
-    return templates.TemplateResponse(request=request, name="dashboard/wizard.html",
-                                      context={**base, "name": "", "port": install_service.DEFAULT_PORT, "error": None, "step": 1})
+    return templates.TemplateResponse(request=request, name="dashboard/wizard.html", context={
+        **base, "name": "", "port": install_service.DEFAULT_PORT, "error": None, "step": 1,
+        "runner": "", "runner_choices": await _runner_choices(db)})
 
 
 @router.post("/containers/name-check")
@@ -181,6 +192,7 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
     form = await request.form()
     name = str(form.get("name", "")).strip()[:100]
     port_text = str(form.get("port", "")).strip()[:10] or str(install_service.DEFAULT_PORT)
+    runner = str(form.get("runner", "")).strip()[:100]
     port = install_service.DEFAULT_PORT
     try:
         parsed = ContainerForm.model_validate({"name": name, "port": port_text})
@@ -189,20 +201,31 @@ async def create_container(request: Request, user: CurrentUserDep, db: DbSession
     except ValidationError as err:
         error = ("Port harus angka 1 sampai 65535." if any(e["loc"] == ("port",) for e in err.errors())
                  else "Isi nama container, maksimal 64 karakter.")
+    if error is None and runner and runner not in runner_registry.entries().active:
+        error = "Runner tidak dikenal atau nonaktif."
     if error is None:
         try:
-            token, install_token, expires_at = await install_service.register(db, name, port, user.username)
+            if runner:
+                token = await install_service.register_on_runner(db, name, port, runner, user.username)
+            else:
+                token, install_token, expires_at = await install_service.register(db, name, port, user.username)
         except NameRejected as err:
             error = str(err)
         except AgentsFileWriteError as err:
             # Token belum dibuat dan daftar agen tidak berubah
             error = f"{err} Container belum didaftarkan."
+        except (install_service.InstallError, runner_service.RunnerError) as err:
+            error = err.detail
     if error:
         return templates.TemplateResponse(
             request=request, name="dashboard/_wizard_name.html",
-            context={"name": name, "port": port_text, "error": error, "step": 1},
+            context={"name": name, "port": port_text, "error": error, "step": 1, "runner": runner,
+                     "runner_choices": await _runner_choices(db)},
             status_code=422, headers={"HX-Retarget": "#wizard", "HX-Reswap": "innerHTML"},
         )
+    if runner:
+        # Tidak ada yang perlu dijalankan admin: langsung ke verifikasi, yang menampilkan kemajuan pemasangan.
+        return Response(status_code=200, headers={"HX-Redirect": f"/containers/{name}/verify"})
     url = _base_url(request)
     context = {
         "name": name, "token": token, "env": install_service.env_text(name, token, url, port), "step": 2,
@@ -245,16 +268,75 @@ async def verify_page(name: str, request: Request, user: CurrentUserDep, db: DbS
     base = await _base(db, user, "containers")
     found = _find(base, name)
     install = await install_service.get(db, name)
+    managed = await control_service.get(db, name)
     return render(request, "dashboard/verify.html", "dashboard/_verify.html",
-                  {**base, "view": found, "step": 3, "install": install})
+                  {**base, "view": found, "step": 3, "install": install, "managed": managed,
+                   "managed_job": await control_service.latest_job(db, name) if managed else None})
+
+
+@router.post("/containers/{name}/install-runner")
+async def retry_runner_install(name: str, user: CurrentUserDep, db: DbSession):
+    try:
+        await control_service.retry_install(db, name, user.username)
+    except runner_service.RunnerError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done("Pemasangan diulang; menunggu runner.", modal=False)
+
+
+async def _update_dialog(request, db, name, *, tag=None, error=None, status_code=200, headers=None):
+    managed = await control_service.get(db, name)
+    if managed is None:
+        raise HTTPException(status_code=404, detail="Container ini tidak dipasang lewat runner.")
+    current = await control_service.current_tag(db, name)
+    return templates.TemplateResponse(
+        request=request, name="dashboard/_image_update_dialog.html", status_code=status_code, headers=headers or {},
+        context={"name": name, "runner": managed.runner, "current": current, "error": error,
+                 "tag": tag or control_service.suggested_tag(current), "latest": settings.IMAGE_TAG_DEFAULT})
+
+
+@router.get("/containers/{name}/image-update")
+async def image_update_dialog(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    return await _update_dialog(request, db, name)
+
+
+@router.post("/containers/{name}/image-update")
+async def image_update(name: str, request: Request, user: CurrentUserDep, db: DbSession):
+    """Image baru lewat runner: container dibuat ulang dengan volume dan .env yang sama."""
+    form = await request.form()
+    tag = str(form.get("tag", "")).strip()[:40]
+    error = None if form.get("confirm") == "yes" else "Centang konfirmasi bahwa aplikasi akan terputus sebentar."
+    if error is None:
+        try:
+            job = await control_service.create_update(db, name, tag, user.username)
+        except runner_service.RunnerError as err:
+            if err.status_code != 422:
+                raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+            error = err.detail
+    if error:
+        return await _update_dialog(request, db, name, tag=tag, error=error, status_code=422,
+                                    headers={"HX-Retarget": "#image-update-form", "HX-Reswap": "outerHTML"})
+    return _done(f"Update {name} ke {tag} diminta, menunggu runner {job.runner}.")
+
+
+@router.post("/containers/{name}/power/{action}")
+async def container_power(name: str, action: str, user: CurrentUserDep, db: DbSession):
+    """Start, stop, atau restart lewat runner yang memasang atau menaikkan container ini."""
+    try:
+        job = await control_service.create_power(db, name, action, user.username)
+    except runner_service.RunnerError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from err
+    return _done(f"{control_service.ACTION_LABEL[job.kind]} {name} diminta, menunggu runner {job.runner}.", modal=False)
 
 
 # ---------- detail container ----------
 async def _detail_context(db, user, name: str, tab: str) -> dict:
     base = await _base(db, user, "containers")
     found = _find(base, name)
+    managed = await control_service.get(db, name)
     return {
-        **base, "view": found, "tab": tab,
+        **base, "view": found, "tab": tab, "managed": managed,
+        "managed_state": await control_service.live_state(db, managed),
+        "managed_job": await control_service.latest_job(db, name) if managed else None,
         "disabled_at": await view.disabled_at(db, name) if found.status == "off" else None,
         "schedule_rows": view.schedule_rows(found.state, base["now"]),
         "oldest_dump": view.oldest_dump(found.state), "disk_used": view.disk_used_percent(found.state),

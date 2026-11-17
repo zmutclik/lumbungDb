@@ -810,6 +810,313 @@ class StandbyRunner(Restorer):
         return status, []
 
 
+MANAGED_LABEL = "lumbung.managed=1"
+CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:/@+=,-]*$")
+
+
+def random_text(length=32):
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def random_user(prefix):
+    return f"{prefix}_" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(12))
+
+
+class ContainerWorker:
+    """Tugas jalur kontrol: memasang container MariaDB baru di mesin ini, dan start/stop/restart container yang dipasang
+    atau dinaikkan lewat runner. Container lain di mesin ini tidak pernah disentuh: labelnya diperiksa dulu."""
+
+    def __init__(self, config, client, job, runner=run, progress=None):
+        self.config, self.client, self.job, self.run = config, client, job, runner
+        self.progress = progress or (lambda step: None)
+        self.note = None
+
+    def _labels(self, name):
+        code, out, _ = self.run(["docker", "inspect", "-f", "{{json .Config.Labels}}", name], 60)
+        if code != 0:
+            return None
+        try:
+            return json.loads(out.strip() or "{}") or {}
+        except ValueError:
+            return {}
+
+    def _state(self, name):
+        code, out, _ = self.run(["docker", "inspect", "-f", "{{.State.Status}}", name], 60)
+        return out.strip() if code == 0 else None
+
+    # ---------- start / stop / restart ----------
+    def power(self, action):
+        name = self.job["container"]
+        labels = self._labels(name)
+        if labels is None:
+            raise NotRun("container", f"container {name} tidak ada di mesin ini")
+        if labels.get("lumbung.managed") != "1" and labels.get("lumbung.promoted") != "1":
+            raise NotRun("container", f"{name} tidak dipasang lewat runner; tidak disentuh")
+        self.progress(f"{action} {name}")
+        args = {"start": ["docker", "start", name], "stop": ["docker", "stop", "-t", "120", name],
+                "restart": ["docker", "restart", "-t", "120", name]}[action]
+        code, _, err = self.run(args, 300)
+        if code != 0:
+            raise NotRun(action, err.strip()[-300:])
+        self.note = f"{name}: {self._state(name) or 'tidak terbaca'}"
+
+    # ---------- update image ----------
+    def _env_file(self, name, labels):
+        """.env container ini: dari pemasangan lewat runner atau dari Naikkan ke production."""
+        base = self.config["container_dir"] if labels.get("lumbung.managed") == "1" else self.config["promote_dir"]
+        path = os.path.join(base, name, ".env")
+        if not os.path.isfile(path):
+            raise NotRun(".env", f"{path} tidak ada; container tidak bisa dibuat ulang dengan password yang sama")
+        return path
+
+    def _recreate_args(self, name, inspected, env_path, image):
+        """Argumen docker run dari container lama: nama, hostname, restart, label lumbung, port, batas sumber daya,
+        volume/bind, healthcheck, dan argumen MariaDB. ENV tidak disalin dari inspect (berisi ENV image lama, mis.
+        MARIADB_VERSION); semua nilai sendiri ada di .env."""
+        config, host = inspected.get("Config") or {}, inspected.get("HostConfig") or {}
+        args = ["docker", "run", "-d", "--name", name, "--hostname", config.get("Hostname") or name,
+                "--restart", (host.get("RestartPolicy") or {}).get("Name") or "always", "--env-file", env_path]
+        for key, value in sorted((config.get("Labels") or {}).items()):
+            if key.startswith("lumbung."):
+                args += ["--label", f"{key}={value}"]
+        for container_port, bindings in sorted((host.get("PortBindings") or {}).items()):
+            for binding in bindings or []:
+                address = f"{binding['HostIp']}:" if binding.get("HostIp") else ""
+                args += ["-p", f"{address}{binding.get('HostPort')}:{container_port.split('/')[0]}"]
+        if host.get("Memory"):
+            args += ["--memory", f"{host['Memory']}b"]
+        if host.get("NanoCpus"):
+            args += ["--cpus", f"{host['NanoCpus'] / 1e9:g}"]
+        for mount in inspected.get("Mounts") or []:
+            source = mount.get("Name") if mount.get("Type") == "volume" else mount.get("Source")
+            if mount.get("Type") not in ("volume", "bind") or not source:
+                continue
+            args += ["-v", f"{source}:{mount['Destination']}{'' if mount.get('RW', True) else ':ro'}"]
+        health = config.get("Healthcheck") or {}
+        test = health.get("Test") or []
+        if len(test) == 2 and test[0] == "CMD-SHELL":
+            args += ["--health-cmd", test[1]]
+            for flag, key in (("--health-interval", "Interval"), ("--health-timeout", "Timeout"),
+                              ("--health-start-period", "StartPeriod")):
+                if health.get(key):
+                    args += [flag, f"{health[key] // 1_000_000_000}s"]
+            if health.get("Retries"):
+                args += ["--health-retries", str(health["Retries"])]
+        args.append(image)
+        args += [str(a) for a in config.get("Cmd") or []]
+        return args
+
+    def _wait_up(self, name):
+        """Sehat menurut healthcheck container; tanpa healthcheck, healthcheck.sh image dipanggil langsung."""
+        for _ in range(max(self.config["ready_seconds"], 600) // 5):
+            code, out, _ = self.run(["docker", "inspect", "-f",
+                                     "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}", name], 60)
+            parts = out.split() if code == 0 else []
+            if parts and parts[0] in ("exited", "dead"):
+                break
+            if len(parts) > 1:
+                if parts[1] == "healthy":
+                    return
+                if parts[1] == "unhealthy":
+                    break
+            elif parts and parts[0] == "running":
+                code, _, _ = self.run(["docker", "exec", name, "healthcheck.sh", "--connect", "--innodb_initialized"], 60)
+                if code == 0:
+                    return
+            time.sleep(5)
+        _, logs, err = self.run(["docker", "logs", "--tail", "15", name])
+        raise Failed("MariaDB tidak sehat dengan image baru", (logs + err).strip()[-LOG_LIMIT:])
+
+    def update_image(self):
+        name = self.job["container"]
+        image = (self.job.get("update") or {}).get("image", "")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_./-]*:[A-Za-z0-9_.-]{1,64}", image):
+            raise NotRun("tugas", "image tujuan tidak terbaca")
+        labels = self._labels(name)
+        if labels is None:
+            raise NotRun("container", f"container {name} tidak ada di mesin ini")
+        if labels.get("lumbung.managed") != "1" and labels.get("lumbung.promoted") != "1":
+            raise NotRun("container", f"{name} tidak dipasang lewat runner; tidak disentuh")
+        env_path = self._env_file(name, labels)
+        code, out, err = self.run(["docker", "inspect", name], 60)
+        try:
+            inspected = json.loads(out)[0] if code == 0 else None
+        except (ValueError, IndexError):
+            inspected = None
+        if not inspected:
+            raise NotRun("inspect", err.strip()[-300:] or "inspect tidak terbaca")
+        old_image = (inspected.get("Config") or {}).get("Image", "")
+        old_restart = ((inspected.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name") or "always"
+        args = self._recreate_args(name, inspected, env_path, image)
+        self.progress(f"unduh image {image}")
+        code, _, err = self.run(["docker", "pull", image], 3600)
+        if code != 0:
+            raise NotRun("unduh image", err.strip()[-300:])
+        old = f"{name}-lama-{self.job['id']}"
+        self.progress("hentikan container lama")
+        # Restart dimatikan dulu: container lama tidak boleh hidup lagi bersama yang baru di volume yang sama.
+        self.run(["docker", "update", "--restart", "no", name], 60)
+        code, _, err = self.run(["docker", "stop", "-t", "120", name], 300)
+        if code != 0:
+            self.run(["docker", "update", "--restart", old_restart, name], 60)
+            raise NotRun("hentikan container", err.strip()[-300:])
+        code, _, err = self.run(["docker", "rename", name, old], 60)
+        if code != 0:
+            self.run(["docker", "update", "--restart", old_restart, name], 60)
+            self.run(["docker", "start", name], 300)
+            raise NotRun("ganti nama container lama", err.strip()[-300:])
+        try:
+            self.progress("jalankan dengan image baru")
+            code, _, err = self.run(args, 600)
+            if code != 0:
+                raise NotRun("jalankan container baru", err.strip()[-300:])
+            self.progress("tunggu MariaDB sehat (termasuk mariadb-upgrade)")
+            self._wait_up(name)
+        except NotRun:
+            self.progress("batalkan: kembalikan container lama")
+            self.run(["docker", "rm", "-f", name], 120)          # tanpa -v: volume data tetap
+            self.run(["docker", "rename", old, name], 60)
+            self.run(["docker", "update", "--restart", old_restart, name], 60)
+            self.run(["docker", "start", name], 300)
+            raise
+        self.run(["docker", "rm", old], 120)                       # tanpa -v: volume dipakai container baru
+        self.note = f"{name}: {old_image} → {image}"
+
+    # ---------- pasang ----------
+    def install(self):
+        info = (self.job.get("install") or {})
+        name, project = info.get("name", ""), info.get("project", "")
+        if not _SAFE_NAME.fullmatch(name) or name != self.job["container"] or not re.fullmatch(r"[a-z0-9_-]{1,64}", project):
+            raise NotRun("tugas", "data pemasangan tidak terbaca (nama atau project)")
+        for key in ("image", "token", "age_recipients", "db_name", "cpus", "memory"):
+            if not _SAFE_VALUE.fullmatch(str(info.get(key, ""))):
+                raise NotRun("tugas", f"nilai {key} berisi karakter yang tidak dikenal")
+        port = int(info.get("port") or 0)
+        if not 1 <= port <= 65535:
+            raise NotRun("tugas", "port tidak valid")
+        if self._labels(name) is not None:
+            raise NotRun("nama container", f"container bernama {name} sudah ada di mesin ini")
+        for volume in (f"{project}_data", f"{project}_backup"):
+            code, _, _ = self.run(["docker", "volume", "inspect", volume], 60)
+            if code == 0:
+                raise NotRun("volume", f"volume {volume} sudah ada di mesin ini; password baru tidak cocok dengan data lama")
+        target = os.path.join(self.config["container_dir"], name)
+        if os.path.exists(os.path.join(target, ".env")):
+            raise NotRun("folder", f"{target}/.env sudah ada")
+        self.progress(f"unduh image {info['image']}")
+        code, _, err = self.run(["docker", "pull", info["image"]], 3600)
+        if code != 0:
+            raise NotRun("unduh image", err.strip()[-300:])
+        os.makedirs(target, mode=0o700, exist_ok=True)
+        env_path = os.path.join(target, ".env")
+        lines = (
+            f"LUMBUNG_URL={self.client.base_url}", f"LUMBUNG_TOKEN={info['token']}",
+            f"LUMBUNG_AGE_RECIPIENTS={info['age_recipients']}",
+            f"MARIADB_ROOT_PASSWORD={random_text()}", f"MARIADB_DATABASE={info['db_name']}",
+            f"MARIADB_USER={random_user('app')}", f"MARIADB_PASSWORD={random_text()}",
+            f"BACKUP_USER={random_user('backup')}", f"BACKUP_PASS={random_text()}",
+            "BACKUP_CRON=", "DUMP_CRON=", "BINLOG_CRON=", "BINLOG_UNSENT_MAX_DAYS=3", "MARIADB_AUTO_UPGRADE=1", "")
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write("\n".join(lines))
+        self.progress("jalankan container")
+        code, _, err = self.run([
+            "docker", "run", "-d", "--name", name, "--hostname", name, "--restart", "always",
+            "--label", MANAGED_LABEL, "--label", f"lumbung.container={name}", "--env-file", env_path,
+            "-p", f"{port}:3306", "--memory", info["memory"], "--cpus", info["cpus"],
+            "-v", f"{project}_data:/var/lib/mysql", "-v", f"{project}_backup:/backup",
+            "-v", "/etc/hostname:/lumbung/server/hostname:ro", "-v", "/etc/machine-id:/lumbung/server/machine-id:ro",
+            "--health-cmd", "healthcheck.sh --connect --innodb_initialized", "--health-start-period", "60s",
+            "--health-interval", "10s", "--health-timeout", "5s", "--health-retries", "3",
+            info["image"]], 600)
+        if code != 0:
+            # Container yang gagal dibuat (mis. port terpakai) dibuang beserta volume barunya, supaya bisa diulang.
+            self.run(["docker", "rm", "-f", name], 120)
+            self.run(["docker", "volume", "rm", f"{project}_data", f"{project}_backup"], 120)
+            os.unlink(env_path)
+            raise NotRun("jalankan container", err.strip()[-300:])
+        self.progress("tunggu MariaDB sehat")
+        for _ in range(max(self.config["ready_seconds"], 600) // 5):
+            code, out, _ = self.run(["docker", "inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+                                     name], 60)
+            health = out.strip() if code == 0 else ""
+            if health == "healthy":
+                self.note = f"{name} berjalan di port {port}; user dan password di {env_path} pada mesin runner"
+                return
+            if health == "unhealthy":
+                break
+            time.sleep(5)
+        _, logs, err = self.run(["docker", "logs", "--tail", "15", name])
+        raise Failed("MariaDB tidak sehat", (logs + err).strip()[-LOG_LIMIT:])
+
+    def execute(self):
+        kind = self.job["kind"]
+        try:
+            if kind == "container_install":
+                self.install()
+            elif kind == "container_update":
+                self.update_image()
+            elif kind in CONTROL_KINDS:
+                self.power(kind.removeprefix("container_"))
+            else:
+                raise NotRun("tugas", f"jenis tugas {kind} tidak dikenal")
+            return "Lolos"
+        except Failed as exc:
+            self.note = f"{exc.step}: {exc.message}"[:500]
+            return "Gagal"
+        except NotRun as exc:
+            self.note = f"{exc.step}: {exc.message}"[:500]
+            return "Tidak terlaksana"
+
+
+def host_metrics(previous=None):
+    """CPU dan memori seluruh mesin dari /proc (di container tanpa lxcfs, /proc/stat dan /proc/meminfo milik host).
+    previous: (total, idle) dari panggilan sebelumnya; CPU dihitung dari selisihnya."""
+    found = {"cpu_count": os.cpu_count()}
+    sample = None
+    try:
+        with open("/proc/stat") as handle:
+            fields = [int(v) for v in handle.readline().split()[1:]]
+        idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+        sample = (sum(fields[:8]), idle)
+        if previous and sample[0] > previous[0]:
+            busy = 1 - (sample[1] - previous[1]) / (sample[0] - previous[0])
+            found["cpu_percent"] = round(max(0.0, min(1.0, busy)) * 100, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        meminfo = {}
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                key, _, rest = line.partition(":")
+                meminfo[key] = int(rest.split()[0]) * 1024
+        found["mem_total"] = meminfo["MemTotal"]
+        found["mem_available"] = meminfo.get("MemAvailable", meminfo.get("MemFree"))
+    except (OSError, ValueError, KeyError, IndexError):
+        pass
+    try:
+        found["load1"] = round(os.getloadavg()[0], 2)
+    except OSError:
+        pass
+    return found, sample
+
+
+def managed_containers(runner=run):
+    """Status container yang dipasang atau dinaikkan lewat runner di mesin ini."""
+    found = []
+    for label in (MANAGED_LABEL, "lumbung.promoted=1"):
+        code, out, _ = runner(["docker", "ps", "-a", "--filter", f"label={label}", "--format",
+                               "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}"], 60)
+        for line in out.splitlines() if code == 0 else []:
+            name, state, status, image = (line.split("\t") + ["", "", ""])[:4]
+            if name and all(name != f["name"] for f in found):
+                found.append({"name": name[:64], "state": state[:20], "status": status[:100], "image": image[:200]})
+    return found[:200]
+
+
 def _binlog_number(name):
     if not name:
         return None
@@ -872,6 +1179,8 @@ class Runner:
         self.config, self.client, self.run = config, client, runner
         self.stop = SHUTDOWN.event
         self.pending_result = None       # hasil yang belum terkirim karena LumbungDB tidak terjangkau
+        self.pending_control = None      # sama, untuk jalur kontrol
+        self.cpu_sample = None
 
     @staticmethod
     def _read_first_line(path):
@@ -887,10 +1196,58 @@ class Runner:
             total, free = usage.total, usage.free
         except OSError:
             total = free = None
+        if self.cpu_sample is None:
+            _, self.cpu_sample = host_metrics()
+            self.stop.wait(1)
+        metrics, self.cpu_sample = host_metrics(self.cpu_sample)
         payload = {"server": self._read_first_line(f"{SERVER_DIR}/hostname"),
                    "machine_id": self._read_first_line(f"{SERVER_DIR}/machine-id"),
-                   "version": self.config["version"], "scratch_total": total, "scratch_free": free}
+                   "version": self.config["version"], "scratch_total": total, "scratch_free": free,
+                   **metrics, "containers": managed_containers(self.run)}
         return self.client.json("POST", "/api/runner/heartbeat", payload)
+
+    def control_once(self):
+        """Jalur kontrol: pasang container dan start/stop/restart. Terpisah dari uji restore, jadi stop container tidak
+        menunggu uji yang berjam-jam. True bila ada tugas yang dikerjakan."""
+        if self.pending_control:
+            job_id, body = self.pending_control
+            code, _ = self.client.json("POST", f"/api/runner/jobs/{job_id}/result", body)
+            if code not in (200, 403, 404, 409):
+                return False
+            self.pending_control = None
+        code, reply = self.client.json("POST", "/api/runner/jobs/claim?lane=control")
+        job = reply.get("job") if code == 200 else None
+        if not job:
+            return False
+        log(f"tugas kontrol {job['id']}: {job['kind']} {job['container']}")
+
+        def progress(step):
+            self.client.json("POST", f"/api/runner/jobs/{job['id']}/progress", {"step": step[:200]})
+
+        worker = ContainerWorker(self.config, self.client, job, self.run, progress)
+        try:
+            if job["kind"] in ("container_install", "container_update"):
+                with SHUTDOWN.guard():
+                    status = worker.execute()
+            else:
+                status = worker.execute()
+        except Exception as exc:     # kesalahan runner sendiri tidak boleh menghentikan loop
+            status, worker.note = "Tidak terlaksana", f"{type(exc).__name__}: {exc}"[:500]
+        self.pending_control = (job["id"], {"status": status, "note": worker.note, "results": []})
+        code, _ = self.client.json("POST", f"/api/runner/jobs/{job['id']}/result", self.pending_control[1])
+        if code in (200, 403, 404, 409):
+            self.pending_control = None
+        log(f"tugas kontrol {job['id']} selesai: {status}")
+        return True
+
+    def control_loop(self):
+        while not self.stop.is_set():
+            try:
+                if not self.control_once():
+                    self.stop.wait(self.config["poll_seconds"])
+            except (OSError, http.client.HTTPException) as exc:
+                log(f"LumbungDB tidak terjangkau (kontrol): {type(exc).__name__}")
+                self.stop.wait(self.config["poll_seconds"])
 
     def flush_result(self):
         if not self.pending_result:
@@ -931,6 +1288,16 @@ class Runner:
 
     def loop(self):
         cleanup_leftovers(self.config, self.run)
+        control = threading.Thread(target=self.control_loop, name="kontrol", daemon=True)
+        control.start()
+        try:
+            self._main_loop()
+        finally:
+            # Pemasangan yang sedang berjalan ditunggu selesai (SHUTDOWN.guard), sisanya berhenti di putaran berikutnya.
+            self.stop.set()
+            control.join()
+
+    def _main_loop(self):
         last_beat = 0
         while not self.stop.is_set():
             try:
@@ -963,6 +1330,8 @@ def load_config():
         "promote_dir": os.environ.get("PROMOTE_DIR") or os.path.join(os.environ.get("SCRATCH_DIR", ""), "promoted"),
         "promote_memory": os.environ.get("PROMOTE_MEMORY", "2g"),
         "promote_cpus": os.environ.get("PROMOTE_CPUS", "2"),
+        # .env container yang dipasang lewat runner (berisi password); datanya di volume Docker <project>_data
+        "container_dir": os.path.join(os.environ.get("SCRATCH_DIR", ""), "containers"),
     }
 
 

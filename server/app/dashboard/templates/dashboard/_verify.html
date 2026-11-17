@@ -6,7 +6,11 @@
 {% include "dashboard/_wiz_steps.html" %}
 <div class="wiz-box"><h2>Verifikasi koneksi {{ view.name }}</h2><ul class="checks">
   <li class="done"><span class="ic">✓</span><div>Terdaftar <span class="muted">{{ state.registered_at | tanggal }}</span></div></li>
-  {% if install %}{% if install.claimed_at %}<li class="done"><span class="ic">✓</span><div>Perintah pasang dijalankan <span class="muted">{{ install.claimed_at | tanggal }}</span></div></li>
+  {% if managed and managed.origin == "install" %}{% set job = managed_job %}
+  {% if job and job.kind == "container_install" and job.status == "Lolos" %}<li class="done"><span class="ic">✓</span><div>Dipasang oleh runner {{ managed.runner }} <span class="muted">{{ job.finished_at | tanggal }}{% if job.note %} · {{ job.note }}{% endif %}</span></div></li>
+  {% elif job and job.kind == "container_install" and job.status in ("Menunggu", "Berjalan") %}<li class="todo"><span class="ic"><span class="spin"></span></span><div><b>{{ "Runner " ~ managed.runner ~ " sedang memasang" if job.status == "Berjalan" else "Menunggu runner " ~ managed.runner }}</b><span class="muted">{{ job.step or "runner mengambil tugas dalam beberapa detik" }}</span></div></li>
+  {% elif job and job.kind == "container_install" %}<li class="todo"><span class="ic">✕</span><div><b>Pemasangan di runner {{ managed.runner }} {{ job.status | lower }}</b><span class="muted">{{ job.note or "" }}</span>{% if not state.heartbeat_at %} <button class="link-btn" hx-post="/containers/{{ view.name }}/install-runner" hx-swap="none">Pasang ulang</button>{% endif %}</div></li>{% endif %}
+  {% elif install %}{% if install.claimed_at %}<li class="done"><span class="ic">✓</span><div>Perintah pasang dijalankan <span class="muted">{{ install.claimed_at | tanggal }}</span></div></li>
   {% elif not state.heartbeat_at %}<li class="todo"><span class="ic"></span><div>Perintah pasang belum dijalankan <span class="muted">berlaku sampai {{ install.expires_at | localtime }}</span></div></li>{% endif %}{% endif %}
   {% if state.heartbeat_at %}<li class="done"><span class="ic">✓</span><div>Heartbeat diterima <span class="muted">server terbaca: {{ state.server or "tidak terbaca" }}{% if state.info.get("ip") %} · {{ state.info.get("ip") }}{% endif %}</span></div></li>
   {% else %}<li class="todo"><span class="ic"><span class="spin"></span></span><div><b>Menunggu heartbeat pertama</b><span class="muted">agen mengirim heartbeat tiap 60 detik setelah container berjalan</span></div></li>{% endif %}
@@ -15,7 +19,7 @@
 </ul>
 {% if state.has_any_backup %}<div class="banner banner-ok"><b>{{ view.name }} siap dipantau.</b>{% if not state.last_full %} Status menjadi Menunggu full pertama sampai full mengikuti jadwal cron.{% endif %}</div>
 {% else %}<p class="hint">Supaya tidak menunggu jadwal, setelah heartbeat masuk pakai Backup sekarang di detail container.</p>{% endif %}
-{% if not state.heartbeat_at and view.status != "off" %}<p class="hint">Perintah hilang atau kedaluwarsa? <button class="link-btn" hx-post="/containers/{{ view.name }}/install-command" hx-target="#live" hx-swap="outerHTML" hx-confirm="Buat perintah pasang baru? Perintah sebelumnya langsung tidak berlaku.">Buat perintah baru</button></p>{% endif %}
+{% if not state.heartbeat_at and view.status != "off" and not managed %}<p class="hint">Perintah hilang atau kedaluwarsa? <button class="link-btn" hx-post="/containers/{{ view.name }}/install-command" hx-target="#live" hx-swap="outerHTML" hx-confirm="Buat perintah pasang baru? Perintah sebelumnya langsung tidak berlaku.">Buat perintah baru</button></p>{% endif %}
 <div class="wiz-actions"><a class="btn btn-pri" href="/containers/{{ view.name }}/backup">Buka detail {{ view.name }}</a><a class="btn" href="/containers">{{ "Kembali ke daftar" if state.has_any_backup else "Tutup, cek nanti" }}</a></div>
 </div>
 </div>

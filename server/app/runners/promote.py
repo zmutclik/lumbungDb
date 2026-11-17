@@ -14,7 +14,7 @@ from app.containers import service as container_service
 from app.core.config import settings
 from app.runners import service, standby
 from app.runners.dependencies import registry as runners
-from app.runners.models import ContainerSettings, Job, Promotion, RunnerHeartbeat, Standby
+from app.runners.models import ContainerSettings, Job, ManagedContainer, Promotion, RunnerHeartbeat, Standby
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,10 @@ async def record_success(db: AsyncSession, job: Job) -> None:
     row = await db.get(Standby, job.container, with_for_update=True)
     if row is not None:
         await db.delete(row)
+    if await db.get(ManagedContainer, new_name) is None:
+        # Container hasil penaikan berjalan di mesin runner ini, jadi bisa di-start/stop/restart lewat runner yang sama.
+        db.add(ManagedContainer(container=new_name, runner=job.runner, port=promotion.port, origin="promote",
+                                created_by=promotion.requested_by))
     db.add(BackupRequest(container=new_name, kind="full", requested_by=promotion.requested_by, status="Menunggu",
                          note="Full pertama setelah Naikkan ke production"))
     db.add(ControlLog(container=new_name, actor=promotion.requested_by, action="Naik ke production",

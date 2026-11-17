@@ -1,0 +1,14 @@
+<form id="image-update-form" hx-post="/containers/{{ name }}/image-update">
+  <h3>Update image: {{ name }}</h3>
+  {% if error %}<div class="banner banner-bad" role="alert">{{ error }}</div>{% endif %}
+  <ul>
+    <li>Runner <b>{{ runner }}</b> mengunduh image baru, menghentikan {{ name }}, lalu menjalankannya lagi dengan volume data, port, <code>.env</code>, dan batas CPU/memori yang sama. Aplikasi terputus selama MariaDB dimulai ulang.</li>
+    <li>Bila MariaDB tidak sehat dengan image baru, container lama dijalankan lagi.</li>
+    <li>Versi MariaDB yang naik (mis. 11.4 ke 12.3) menjalankan <code>mariadb-upgrade</code> pada datanya dan tidak bisa diturunkan lagi. Pastikan full backup terbaru sudah lolos uji restore.</li>
+  </ul>
+  <div class="field"><label for="iu-tag">Tag image</label>
+    <input id="iu-tag" name="tag" value="{{ tag }}" required autocomplete="off" spellcheck="false" pattern="\d+\.\d+-a\d+" placeholder="mis. {{ latest }}">
+    <div class="hint">Sekarang: <code>{{ current or "tidak terbaca" }}</code>. Terbaru: <code>{{ latest }}</code>. Image <code>zmutclik/mariadb:lumbungdb-&lt;tag&gt;</code>; samakan versi MariaDB bila hanya ingin agen terbaru.</div></div>
+  <div class="field"><label><input type="checkbox" name="confirm" value="yes" required> Saya mengerti {{ name }} berhenti sebentar.</label></div>
+  <div class="modal-actions"><button class="btn" type="button" data-close-modal autofocus>Batal</button><button class="btn btn-pri" type="submit">Update image</button></div>
+</form>

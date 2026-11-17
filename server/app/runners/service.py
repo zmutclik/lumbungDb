@@ -49,26 +49,43 @@ def file_row(backup: Backup) -> dict:
     }
 
 
-async def claim_next(db: AsyncSession, runner: str) -> dict | None:
-    """Tiap runner mengerjakan satu tugas. Batas total memakai penghitungan biasa: pelampauan sesaat hanya
-    menambah satu unduhan, sedangkan batas unduhan tetap dijaga terpisah."""
+CONTROL_KINDS = ("container_install", "container_start", "container_stop", "container_restart", "container_update")
+
+
+async def claim_next(db: AsyncSession, runner: str, lane: str = "main") -> dict | None:
+    """Tiap runner mengerjakan satu tugas per jalur. Batas total memakai penghitungan biasa: pelampauan sesaat hanya
+    menambah satu unduhan, sedangkan batas unduhan tetap dijaga terpisah.
+
+    Jalur kontrol (pasang container, start/stop/restart) tidak mengunduh dari NAS dan tidak ikut batas total, supaya
+    stop container tidak menunggu uji restore. Runner lama tidak mengirim lane, jadi tidak pernah menerima tugas ini."""
+    control = lane == "control"
+    kinds = Job.kind.in_(CONTROL_KINDS) if control else Job.kind.not_in(CONTROL_KINDS)
     async with db.begin():
-        nas = await nas_service.get_view(db)
-        if nas.problem:
-            return None
+        if not control:
+            nas = await nas_service.get_view(db)
+            if nas.problem:
+                return None
         running = await db.scalar(
-            select(func.count()).select_from(Job).where(Job.runner == runner, Job.status == STATUS_RUNNING))
-        total = await db.scalar(select(func.count()).select_from(Job).where(Job.status == STATUS_RUNNING))
-        if running or total >= settings.RUNNER_MAX_TOTAL:
+            select(func.count()).select_from(Job).where(Job.runner == runner, Job.status == STATUS_RUNNING, kinds))
+        if running:
             return None
+        if not control:
+            total = await db.scalar(select(func.count()).select_from(Job).where(Job.status == STATUS_RUNNING, kinds))
+            if total >= settings.RUNNER_MAX_TOTAL:
+                return None
         job = await db.scalar(
-            select(Job).where(Job.runner == runner, Job.status == STATUS_WAITING)
+            select(Job).where(Job.runner == runner, Job.status == STATUS_WAITING, kinds)
             .order_by(Job.id).limit(1).with_for_update(skip_locked=True))
         if job is None:
             return None
         job.status = STATUS_RUNNING
         job.claimed_at = func.now()
         job.deadline_at = db_now_plus(settings.JOB_TIMEOUT_MINUTES * 60)
+        if control:
+            from app.runners import control as control_service
+            reply = {"id": job.id, "kind": job.kind, "container": job.container, "files": []}
+            reply.update(await control_service.claim_context(db, job))
+            return reply
         files = list(await db.scalars(
             select(Backup).join(JobFile, JobFile.backup_id == Backup.id).where(JobFile.job_id == job.id)
             .order_by(Backup.id)))
@@ -104,8 +121,9 @@ async def finish_job(db: AsyncSession, runner: str, job_id: int, data: JobResult
             if item.backup_id is not None and item.backup_id not in allowed:
                 raise RunnerError(403, "File bukan bagian dari tugas ini.")
             db.add(RestoreTest(job_id=job_id, container=job.container, runner=runner, **item.model_dump()))
-        from app.runners import standby
+        from app.runners import control, standby
         await standby.record_result(db, job, data, allowed)
+        await control.record_result(db, job, data)
         job.status = data.status
         job.note = data.note
         job.finished_at = func.now()

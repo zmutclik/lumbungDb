@@ -97,6 +97,21 @@ async def register(db: AsyncSession, name: str, port: int, actor: str) -> tuple[
     return agent_token, install_token, expires_at
 
 
+async def register_on_runner(db: AsyncSession, name: str, port: int, runner: str, actor: str) -> str:
+    """Tambah container yang langsung dipasang runner di mesinnya. Tanpa perintah curl: runner mengambil tugasnya."""
+    from app.runners import control
+    from app.runners.dependencies import registry as runners
+    if runner not in runners.entries().active:
+        raise InstallError(422, "Pilih runner yang aktif.")
+    agent_token = await container_service.register(db, name)
+    try:
+        await control.create_install(db, name, runner, port, actor)
+    except Exception:
+        await container_service.cancel_pending(db, name)
+        raise
+    return agent_token
+
+
 async def get(db: AsyncSession, name: str) -> ContainerInstall | None:
     return await db.scalar(select(ContainerInstall).where(ContainerInstall.container == name))
 
