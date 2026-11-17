@@ -46,8 +46,9 @@ Semua uji memakai folder lokal sebagai NAS, Telegram tiruan, dan data contoh. Be
 - `scripts/e2e.sh` belum mencakup runner, Naikkan ke production, Restore manual, dan AI.
 - Image `lumbungdb-10.11-a5`, `11.4-a5`, dan `12.3-a5` sudah di Docker Hub (15 November 2026). Tag 12.3 sebelum a5
   hanya dibangun lokal.
-- Log slow query (17 November 2026) butuh agen a6: image `lumbungdb-*-a6` belum dibangun, dan `IMAGE_TAG_DEFAULT`
-  belum dinaikkan. Agen lama tetap jalan, hanya tab Slow query kosong. Belum diuji dengan MariaDB sungguhan.
+- Image `lumbungdb-10.11-a6`, `11.4-a6`, dan `12.3-a6` (log slow query) sudah di Docker Hub (17 November 2026);
+  `IMAGE_TAG_DEFAULT` kini `12.3-a6`. Agen lama tetap jalan, hanya tab Slow query kosong. Alur slow query dari agen
+  sampai dashboard belum dicoba di server sungguhan.
 - Mode sidecar (15 November 2026): image dan compose sudah ada dan diuji dengan target `mariadb:10.11` dan `mariadb:11.4`
   resmi (full, dump, binlog, restore + replay binlog, restart target). Belum ada: pilihan "Container sudah ada" di Tambah
   container dan script pasangnya, penanda mode sidecar di dashboard (kartu tuning tetap tampil), runner dengan image

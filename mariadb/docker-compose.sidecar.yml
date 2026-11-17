@@ -1,6 +1,6 @@
 # Mode sidecar: backup dan replika untuk container MariaDB yang sudah ada tanpa mengganti image-nya (image mariadb resmi
 # atau tag zmutclik/mariadb lama). Container MariaDB tidak di-restart dan config-nya tidak diubah. Syarat:
-#   - IMAGE_TAG berversi MariaDB sama dengan target sampai minor, mis. target 10.11.x -> 10.11-a5. mariadb-backup
+#   - IMAGE_TAG berversi MariaDB sama dengan target sampai minor, mis. target 10.11.x -> 10.11-a6. mariadb-backup
 #     menolak server dengan versi lain.
 #   - Binlog aktif di target (SELECT @@log_bin = 1) untuk binlog dan database cadangan. Tanpa itu hanya full dan dump.
 #   - Akun dibuat sekali di target: lihat lumbung-sidecar-sql.

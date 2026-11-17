@@ -312,7 +312,7 @@ dan agen. Container MariaDB tidak di-restart dan config-nya tidak diubah. Compos
   `up -d --force-recreate` untuk sidecar.
 - Semua volume target dipasang read-only di path yang sama lewat `volumes_from`, termasuk binlog yang `log_bin`-nya di
   luar datadir. `/backup` milik sidecar sendiri.
-- `IMAGE_TAG` harus sama versinya dengan target sampai minor: target 10.11.x memakai `10.11-a5`, 11.4.x memakai `11.4-a5`.
+- `IMAGE_TAG` harus sama versinya dengan target sampai minor: target 10.11.x memakai `10.11-a6`, 11.4.x memakai `11.4-a6`.
   Image tersedia untuk 10.11, 11.4, dan 12.3. Versi lain: `MARIADB_VERSION=<versi> ./build-image.sh`.
 - Binlog harus aktif di target (`SELECT @@log_bin` bernilai 1) untuk arsip binlog dan database cadangan. Menyalakannya
   butuh restart target sekali dengan `log_bin` dan `server_id`. Tanpa itu hanya full dan dump yang jalan.
@@ -323,7 +323,7 @@ Langkah:
 
 ```bash
 # .env di samping docker-compose.yml (salinan docker-compose.sidecar.yml), izin 600:
-#   IMAGE_TAG=10.11-a5  CONTAINER_NAME=<nama di LumbungDB>  TARGET_CONTAINER=<nama container MariaDB>
+#   IMAGE_TAG=10.11-a6  CONTAINER_NAME=<nama di LumbungDB>  TARGET_CONTAINER=<nama container MariaDB>
 #   BACKUP_USER=backup_<acak>  BACKUP_PASS=<acak>  LUMBUNG_METRICS_PASS=<acak>
 #   LUMBUNG_URL=...  LUMBUNG_TOKEN=...  LUMBUNG_AGE_RECIPIENTS=...  (DB_PORT bila target tidak di 3306)
 
